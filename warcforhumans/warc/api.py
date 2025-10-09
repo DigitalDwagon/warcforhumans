@@ -2,7 +2,7 @@ import io
 import sys
 import uuid
 from io import BytesIO, BufferedRandom
-from datetime import datetime
+from datetime import datetime, timezone
 from socket import socket
 from ssl import SSLSocket
 
@@ -58,7 +58,7 @@ class WARCRecord:
         self._close_content_stream = close
 
     def date_now(self):
-        self.set_header("WARC-Date", datetime.now().isoformat())
+        self.set_header("WARC-Date", datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
     def get_id(self) -> str:
         if "WARC-Record-ID" not in self.headers:
@@ -135,6 +135,7 @@ class WARCFile:
 
         warc_record.set_content(body.encode("utf-8"))
         self.write_record(warc_record, write_warcinfo_header=False)
+        self._warcinfo_record = warc_record
 
     def write_record(self, record: WARCRecord, write_warcinfo_header: bool = True):
         if self._warcinfo_record is not None and write_warcinfo_header:
