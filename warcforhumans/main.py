@@ -1,5 +1,4 @@
 import requests
-import warcforhumans.http
 
 # --- Example usage with urllib3 ---
 if __name__ == "__main__":

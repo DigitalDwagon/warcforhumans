@@ -18,7 +18,7 @@ _original_httpconnection_send = http.client.HTTPConnection.send
 def logging_send(self, data: bytes):
     # todo might have to patch socket.send for potential re-encoding into iso-8859-1?
     print(f"[HTTPConnection.send] {len(data)}:\n{data!r}\n")
-    _thread_local.request_id = f"<urn:uuid:{uuid.uuid4()}>"
+    _thread_local.request_id = uuid.uuid4()
 
     # Neither the HTTPConnection nor HTTPResponse store the full URL,
     # so here we have to manually reconstruct it
@@ -58,6 +58,7 @@ def logging_send(self, data: bytes):
     except Exception:
         raise
 
+    _thread_local.url = url
     print(f"[HTTPConnection.send] Request ID: {_thread_local.request_id}, URL: {url}")
 
     return _original_httpconnection_send(self, data)
