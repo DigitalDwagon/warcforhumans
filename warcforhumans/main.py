@@ -3,6 +3,7 @@ import sys
 import requests
 import capture.http
 from warcforhumans.warc.api import WARCFile
+from warcforhumans.warc.compression import ZSTDCompressor, ZSTDCompressorWithDictionary
 
 # --- Example usage with urllib3 ---
 if __name__ == "__main__":
@@ -14,8 +15,15 @@ if __name__ == "__main__":
     print("Body length:", len(resp.data))"""
     #r = requests.get("http://digitaldragon.dev", headers={"Accept-Encoding": "identity"})
     #print(r.text)
-    print(sys.version)
-    warc_file = WARCFile("test.warc")
+
+    """print(sys.version)
+    warc_file = WARCFile("test", compressor=ZSTDCompressor(level=11))
+    capture.http.warc_file = warc_file
+    r = requests.get("http://digitaldragon.dev", headers={"Accept-Encoding": "identity"})
+    warc_file.close()
+    """
+
+    warc_file = WARCFile("test", compressor=ZSTDCompressorWithDictionary("test_zstd_dict", level=11))
     capture.http.warc_file = warc_file
     r = requests.get("http://digitaldragon.dev", headers={"Accept-Encoding": "identity"})
     warc_file.close()

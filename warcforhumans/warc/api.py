@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from socket import socket
 from ssl import SSLSocket
 
+from warcforhumans.warc.compression import Compressor
+
 
 class WARCRecord:
     def __init__(self, type: str = None, content_type: str = None):
@@ -108,11 +110,18 @@ class WARCRecord:
             self.content.close()
 
 class WARCFile:
-    def __init__(self, file_path: str, create_warcinfo: bool = True):
-        self.file_path = file_path
-        self.file = open(file_path, "ab")
+    def __init__(self, file_path: str, create_warcinfo: bool = True, compressor: Compressor = None):
         self._warcinfo_record = None
         self._pending_records = []
+
+        if not compressor:
+            self._compressor = Compressor()
+        else:
+            self._compressor = compressor
+
+        self.file_path = file_path + ".warc" + self._compressor.file_extension()
+        self.file = open(self.file_path, "ab")
+        self._compressor.start(self.file)
 
         if create_warcinfo:
             self.create_warcinfo_record()
@@ -141,8 +150,8 @@ class WARCFile:
         if self._warcinfo_record is not None and write_warcinfo_header:
             record.set_header("WARC-Warcinfo-ID", self._warcinfo_record.get_id())
 
-        for chunk in record.serialize_stream():
-            self.file.write(chunk)
+        self._compressor.write_record(record, self.file)
+
         record.close()
         self.file.flush()
 
