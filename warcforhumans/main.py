@@ -2,6 +2,7 @@ import sys
 
 import requests
 import capture.http
+from warcforhumans.warc.api import WARCFile
 
 # --- Example usage with urllib3 ---
 if __name__ == "__main__":
@@ -14,3 +15,7 @@ if __name__ == "__main__":
     #r = requests.get("http://digitaldragon.dev", headers={"Accept-Encoding": "identity"})
     #print(r.text)
     print(sys.version)
+    warc_file = WARCFile("test.warc")
+    capture.http.warc_file = warc_file
+    r = requests.get("http://digitaldragon.dev", headers={"Accept-Encoding": "identity"})
+    warc_file.close()

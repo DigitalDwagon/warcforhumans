@@ -12,7 +12,8 @@ class WARCRecord:
         # https://iipc.github.io/warc-specifications/specifications/warc-format/warc-1.1-annotated/#warc-type-mandatory
 
         self.headers: dict[str, list[str]] = {}
-        self.content: BytesIO = None
+        self.content = None
+        self._close_content_stream : bool = False
 
         if type is not None:
             self.set_type(type)
@@ -50,15 +51,16 @@ class WARCRecord:
         self.content = content
         self.set_header("Content-Length", str(len(content)))
 
-    def set_content_stream(self, stream: BufferedRandom):
+    def set_content_stream(self, stream: BufferedRandom, close: bool = False):
         self.content = stream
         stream.seek(0, io.SEEK_END)
         self.set_header("Content-Length", str((stream.tell())))
+        self._close_content_stream = close
 
     def date_now(self):
         self.set_header("WARC-Date", datetime.now().isoformat())
 
-    def get_id(self):
+    def get_id(self) -> str:
         if "WARC-Record-ID" not in self.headers:
             self.set_header("WARC-Record-ID", f"<{str(uuid.uuid4().urn)}>")
         return self.headers["WARC-Record-ID"][0]
@@ -101,16 +103,26 @@ class WARCRecord:
 
         yield b"\r\n\r\n"
 
+    def close(self):
+        if self._close_content_stream and hasattr(self.content, 'close'):
+            self.content.close()
 
 class WARCFile:
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, create_warcinfo: bool = True):
         self.file_path = file_path
         self.file = open(file_path, "ab")
         self._warcinfo_record = None
+        self._pending_records = []
 
-    def create_warcinfo_record(self, filename: str, software: str = "", headers: dict[str, str] = dict):
+        if create_warcinfo:
+            self.create_warcinfo_record()
+
+    def create_warcinfo_record(self, software: str = "", headers: dict[str, str] = None):
+        if headers is None:
+            headers = {}
+
         warc_record = WARCRecord("warcinfo", "application/warc-fields")
-        warc_record.set_header("WARC-Filename", filename)
+        warc_record.set_header("WARC-Filename", self.file.name)
 
         headers["software"] = "warcforhumans/0.1-alpha " + software
         headers["format"] = "WARC File Format 1.1"
@@ -122,6 +134,7 @@ class WARCFile:
             body += f"{key}: {value}\r\n"
 
         warc_record.set_content(body.encode("utf-8"))
+        self.write_record(warc_record, write_warcinfo_header=False)
 
     def write_record(self, record: WARCRecord, write_warcinfo_header: bool = True):
         if self._warcinfo_record is not None and write_warcinfo_header:
@@ -129,7 +142,24 @@ class WARCFile:
 
         for chunk in record.serialize_stream():
             self.file.write(chunk)
+        record.close()
         self.file.flush()
 
+    def next_request_pair(self, request: WARCRecord, response: WARCRecord):
+        self.flush_pending()
+
+        self._pending_records.append(request)
+        self._pending_records.append(response)
+
+    def discard_last(self):
+        self._pending_records = []
+
+    def flush_pending(self):
+        if self._pending_records:
+            for record in self._pending_records:
+                self.write_record(record)
+            self._pending_records = []
+
     def close(self):
+        self.flush_pending()
         self.file.close()
