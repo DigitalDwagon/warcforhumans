@@ -3,6 +3,7 @@ import io
 import socket
 import threading
 import uuid
+import tempfile
 
 _thread_local = threading.local()
 
@@ -36,57 +37,75 @@ _original_httpresponse_init = http.client.HTTPResponse.__init__
 
 class HTTPResponseWrapper(http.client.HTTPResponse):
     def __init__(self, sock, debuglevel=0, method=None, url=None):
-        print(f"[HTTPResponseWrapper] Intercepting response for request ID: {_thread_local.request_id if hasattr(_thread_local, 'request_id') else 'N/A'}")
+        # detect whether https or http
 
+
+        print(f"[HTTPResponseWrapper] Intercepting response for request ID: {_thread_local.request_id if hasattr(_thread_local, 'request_id') else 'N/A'}")
         fp = sock.makefile("rb", buffering=0)
-        data = b""
+        temp_file = tempfile.TemporaryFile()
+
+        # Read headers
         while True:
             line = fp.readline(65537)
-            data += line
+            temp_file.write(line)
             if not line or line == b"\r\n":
                 break
 
-        # get the value of the content-length header if present
+
+        temp_file.seek(0)
         content_length = None
         transfer_encoding = None
-        for header in data.split(b"\r\n"):
+        for header in temp_file:
             if header.lower().startswith(b"content-length:"):
                 try:
                     content_length = int(header.split(b":", 1)[1].strip())
-                    break
                 except ValueError:
                     pass
             elif header.lower().startswith(b"transfer-encoding:"):
                 transfer_encoding = header.split(b":", 1)[1].strip().lower()
-                break
-        #print(data)
+
+        temp_file.seek(0, io.SEEK_END)
 
         if content_length is not None:
             to_read = content_length
             while to_read > 0:
-                chunk = fp.read(2048)
-                data += chunk
+                chunk = fp.read(min(2048, to_read))
+                temp_file.write(chunk)
                 to_read -= len(chunk)
 
-        if transfer_encoding == b"chunked":
+        elif transfer_encoding == b"chunked":
             while True:
                 chunk_size_line = fp.readline()
-                data += chunk_size_line
+                temp_file.write(chunk_size_line)
                 try:
                     chunk_size = int(chunk_size_line.split(b";", 1)[0].strip(), 16)
                 except ValueError:
                     break
                 if chunk_size == 0:
-                    #print("starting to read last rn")
-                    data += fp.read(2)
+                    temp_file.write(fp.read(2))  # Read the trailing \r\n
                     break
-                to_read = chunk_size
+                to_read = chunk_size + 2 # include trailing \r\n
                 while to_read > 0:
-                    chunk = fp.read(2048)
-                    data += chunk
+                    chunk = fp.read(min(2048, to_read))
+                    temp_file.write(chunk)
                     to_read -= len(chunk)
 
-        print(f"[HTTPResponseWrapper] {len(data)} bytes:\n{data!r}\n")
-        _original_httpresponse_init(self, sock=FakeSocket(data), debuglevel=debuglevel, method=method, url=url)
+        temp_file.seek(0)  # Reset file pointer for reading
+        print(f"[HTTPResponseWrapper] Response written to temporary file")
+        print(f"[HTTPResponseWrapper] Full response preview:\n{temp_file.read()!r}\n")
+        temp_file.seek(0)
+        _original_httpresponse_init(self, sock=FakeSocket(temp_file.read()), debuglevel=debuglevel, method=method, url=url)
+        temp_file.close()  # Close the temporary file
 
 http.client.HTTPResponse.__init__ = HTTPResponseWrapper.__init__
+
+
+_original_httpconnection_putrequest = http.client.HTTPConnection.putrequest
+
+def logging_putrequest(self, method, url, *args, **kwargs):
+    print(f"[HTTPConnection.putrequest] Method: {method}, URL: {url}")
+    return _original_httpconnection_putrequest(self, method, url, *args, **kwargs)
+
+
+# Patch
+http.client.HTTPConnection.putrequest = logging_putrequest

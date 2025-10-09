@@ -9,5 +9,5 @@ if __name__ == "__main__":
     resp = http.request("GET", "https://wiki.archiveteam.org")
     print("Response status:", resp.status)
     print("Body length:", len(resp.data))"""
-    r = requests.get("https://wiki.archiveteam.org")
+    r = requests.get("http://digitaldragon.dev")
     #print(r.text)
