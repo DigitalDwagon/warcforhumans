@@ -1,4 +1,5 @@
 import requests
+import capture.http
 
 # --- Example usage with urllib3 ---
 if __name__ == "__main__":

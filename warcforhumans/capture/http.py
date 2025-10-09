@@ -4,6 +4,9 @@ import socket
 import threading
 import uuid
 import tempfile
+import hashlib
+
+from warcforhumans.warc.api import WARCRecord
 
 try:
     import urllib3.connection
@@ -58,8 +61,36 @@ def logging_send(self, data: bytes):
     except Exception:
         raise
 
-    _thread_local.url = url
+    _thread_local.request_url = url
     print(f"[HTTPConnection.send] Request ID: {_thread_local.request_id}, URL: {url}")
+
+    if self.sock is None:
+        if not self.auto_open:
+            raise http.client.NotConnected()
+        self.connect()
+
+    warc_record = WARCRecord()
+    warc_record.set_type("request")
+    warc_record.set_header("WARC-Target-URI", url)
+    warc_record.set_header("WARC-Record-ID", f"<urn:uuid:{_thread_local.request_id}>")
+    warc_record.set_header("Content-Type", "application/http;msgtype=request")
+    warc_record.set_header("WARC-Block-Digest", "sha1:" + hashlib.sha1(data).hexdigest())
+    warc_record.set_header("WARC-IP-Address", self.sock.getpeername()[0])
+    warc_record.add_header("WARC-Protocol", self._http_vsn_str.lower())
+    warc_record.date_now()
+    warc_record.set_content(data)
+
+    if protocol == "https":
+        encryption_protocol, version = self.sock.cipher()[1].split("v")
+        warc_record.add_header("WARC-Protocol", encryption_protocol.lower() + "/" + version)
+        warc_record.add_header("WARC-Cipher-Suite", self.sock.cipher()[0])
+
+
+    warc_content = str()
+    for chunk in warc_record.serialize_stream():
+        warc_content += chunk.decode("utf-8", errors="replace")
+    print(f"[WARC Request Record]\n{warc_content}\n")
+
 
     return _original_httpconnection_send(self, data)
 
