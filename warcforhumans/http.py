@@ -5,6 +5,12 @@ import threading
 import uuid
 import tempfile
 
+try:
+    import urllib3.connection
+    has_urllib3 = True
+except ImportError:
+    has_urllib3 = False
+
 _thread_local = threading.local()
 
 # Keep reference to original send
@@ -12,9 +18,45 @@ _original_httpconnection_send = http.client.HTTPConnection.send
 
 def logging_send(self, data):
     # data is bytes
-    preview = data#[:512]  # preview first 512 bytes
-    print(f"[HTTPConnection.send] {len(data)} bytes, preview:\n{preview!r}\n")
+    print(f"[HTTPConnection.send] {len(data)}:\n{data!r}\n")
     _thread_local.request_id = f"<urn:uuid:{uuid.uuid4()}>"
+
+
+
+    url = str()
+    protocol = None
+    print(self.__class__)
+    if type(self) == http.client.HTTPSConnection:
+        protocol = "https"
+    elif type(self) == http.client.HTTPConnection:
+        protocol = "http"
+    elif has_urllib3 and type(self) == urllib3.connection.HTTPSConnection:
+        protocol = "https"
+    elif has_urllib3 and type(self) == urllib3.connection.HTTPConnection:
+        protocol = "http"
+    else:
+        raise TypeError("Unknown connection type")
+
+    url += protocol
+    url += "://"
+    url += self.host
+
+    if protocol == "http" and self.port != 80 and self.port is not None:
+        url += f":{self.port}"
+    elif protocol == "https" and self.port != 443 and self.port is not None:
+        url += f":{self.port}"
+
+    try:
+        first_line = data.split(b"\r\n", 1)[0]
+        parts = first_line.split(b" ")
+        if len(parts) >= 2:
+            path = parts[1].decode("utf-8", errors="replace")
+            url += path
+    except Exception:
+        raise
+
+    print(f"[HTTPConnection.send] Request ID: {_thread_local.request_id}, URL: {url}")
+
     return _original_httpconnection_send(self, data)
 
 # Patch
