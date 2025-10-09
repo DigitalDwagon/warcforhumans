@@ -75,16 +75,12 @@ def logging_send(self, data: bytes):
     warc_record.set_header("WARC-Record-ID", f"<urn:uuid:{_thread_local.request_id}>")
     warc_record.set_header("Content-Type", "application/http;msgtype=request")
     warc_record.set_header("WARC-Block-Digest", "sha1:" + hashlib.sha1(data).hexdigest())
-    warc_record.set_header("WARC-IP-Address", self.sock.getpeername()[0])
     warc_record.add_header("WARC-Protocol", self._http_vsn_str.lower())
+    warc_record.add_headers_for_socket(self.sock)
     warc_record.date_now()
     warc_record.set_content(data)
 
-    if protocol == "https":
-        encryption_protocol, version = self.sock.cipher()[1].split("v")
-        warc_record.add_header("WARC-Protocol", encryption_protocol.lower() + "/" + version)
-        warc_record.add_header("WARC-Cipher-Suite", self.sock.cipher()[0])
-
+    _thread_local.request_warc_record = warc_record
 
     warc_content = str()
     for chunk in warc_record.serialize_stream():
@@ -124,9 +120,12 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     fp = sock.makefile("rb", buffering=0)
     temp_file = tempfile.TemporaryFile()
 
+    block_hash = hashlib.sha1()
+
     # Read up through the end of the header block.
     while True:
         line = fp.readline(65537)
+        block_hash.update(line)
         temp_file.write(line)
         if not line or line == b"\r\n":
             break
@@ -134,6 +133,9 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     temp_file.seek(0)
     content_length = None
     transfer_encoding = None
+
+    http_version = temp_file.readline(65537).decode("utf-8").split(" ", 1)[0].lower()
+
     for header in temp_file:
         # TODO: this header parsing could probably be more robust
         if header.lower().startswith(b"content-length:"):
@@ -145,6 +147,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
             transfer_encoding = header.split(b":", 1)[1].strip().lower()
 
     temp_file.seek(0, io.SEEK_END)
+    payload_hash = hashlib.sha1()
 
     # TODO: What if the connection times out or is closed early?
     if content_length is not None:
@@ -152,28 +155,55 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
         while to_read > 0:
             chunk = fp.read(min(2048, to_read))
             temp_file.write(chunk)
+            block_hash.update(chunk)
+            payload_hash.update(chunk)
             to_read -= len(chunk)
 
     elif transfer_encoding == b"chunked":
         while True:
             chunk_size_line = fp.readline()
+            block_hash.update(chunk_size_line)
+            payload_hash.update(chunk_size_line)
             temp_file.write(chunk_size_line)
             try:
                 chunk_size = int(chunk_size_line.split(b";", 1)[0].strip(), 16)
             except ValueError:
                 break
             if chunk_size == 0:
-                temp_file.write(fp.read(2))  # Read the trailing \r\n
+                trailing = fp.read(2) # Read the trailing \r\n
+                temp_file.write(trailing)
+                block_hash.update(trailing)
+                payload_hash.update(trailing)
                 break
             to_read = chunk_size + 2  # include trailing \r\n
             while to_read > 0:
                 chunk = fp.read(min(2048, to_read))
                 temp_file.write(chunk)
+                block_hash.update(chunk)
+                payload_hash.update(chunk)
                 to_read -= len(chunk)
 
     temp_file.seek(0)  # Reset file pointer for reading
     print(f"[HTTPResponseWrapper] Response written to temporary file")
     print(f"[HTTPResponseWrapper] Full response preview:\n{temp_file.read()!r}\n")
+    warc_record = WARCRecord()
+    warc_record.set_type("response")
+
+    warc_record = WARCRecord()
+    warc_record.set_type("request")
+    warc_record.set_header("WARC-Target-URI", _thread_local.request_url)
+    warc_record.set_header("WARC-Record-ID", f"<urn:uuid:{_thread_local.request_id}>")
+    warc_record.set_header("WARC-Concurrent-To", f"<urn:uuid:{_thread_local.request_id}>")
+    warc_record.set_header("Content-Type", "application/http;msgtype=response")
+    warc_record.set_header("WARC-Block-Digest", "sha1:" + block_hash.hexdigest())
+    warc_record.set_header("WARC-Payload-Digest", "sha1:" + payload_hash.hexdigest())
+    warc_record.add_header("WARC-Protocol", http_version)
+    warc_record.add_headers_for_socket(sock)
+    warc_record.date_now()
+    warc_record.set_content_stream(temp_file)
+
+    _thread_local.response_warc_record = warc_record
+
     temp_file.seek(0)
     _original_httpresponse_init(self, sock=FakeSocket(temp_file.read()), debuglevel=debuglevel, method=method, url=url)
     temp_file.close()

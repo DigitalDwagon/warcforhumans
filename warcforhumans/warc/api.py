@@ -1,12 +1,26 @@
-from io import BytesIO
+import io
+import sys
+import uuid
+from io import BytesIO, BufferedRandom
 from datetime import datetime
+from socket import socket
+from ssl import SSLSocket
+
 
 class WARCRecord:
-    def __init__(self):
+    def __init__(self, type: str = None, content_type: str = None):
         # https://iipc.github.io/warc-specifications/specifications/warc-format/warc-1.1-annotated/#warc-type-mandatory
 
         self.headers: dict[str, list[str]] = {}
         self.content: BytesIO = None
+
+        if type is not None:
+            self.set_type(type)
+            self.get_id()
+            self.date_now()
+
+        if content_type is not None:
+            self.set_header("Content-Type", content_type)
 
     def set_header(self, key: str, value):
         if isinstance(value, list):
@@ -36,13 +50,27 @@ class WARCRecord:
         self.content = content
         self.set_header("Content-Length", str(len(content)))
 
-    def set_content_stream(self, stream: BytesIO):
+    def set_content_stream(self, stream: BufferedRandom):
         self.content = stream
-        self.set_header("Content-Length", str(len(stream.getbuffer())))
+        stream.seek(0, io.SEEK_END)
+        self.set_header("Content-Length", str((stream.tell())))
 
     def date_now(self):
         self.set_header("WARC-Date", datetime.now().isoformat())
 
+    def get_id(self):
+        if "WARC-Record-ID" not in self.headers:
+            self.set_header("WARC-Record-ID", f"<{str(uuid.uuid4().urn)}>")
+        return self.headers["WARC-Record-ID"][0]
+
+
+    def add_headers_for_socket(self, sock: socket):
+        self.set_header("WARC-IP-Address", sock.getpeername()[0])
+
+        if isinstance(sock, SSLSocket):
+            encryption_protocol, version = sock.cipher()[1].split("v")
+            self.add_header("WARC-Protocol", encryption_protocol.lower() + "/" + version)
+            self.add_header("WARC-Cipher-Suite", sock.cipher()[0])
 
     def serialize_stream(self):
         if self.content is None:
@@ -63,9 +91,45 @@ class WARCRecord:
         if isinstance(self.content, bytes):
             yield self.content
         else:
-            content_buffer = self.content.getbuffer()
             chunk_size = 8192  # Define a chunk size
-            for i in range(0, len(content_buffer), chunk_size):
-                yield content_buffer[i:i + chunk_size]
+            self.content.seek(0)
+            while True:
+                chunk = self.content.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
 
         yield b"\r\n\r\n"
+
+
+class WARCFile:
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+        self.file = open(file_path, "ab")
+        self._warcinfo_record = None
+
+    def create_warcinfo_record(self, filename: str, software: str = "", headers: dict[str, str] = dict):
+        warc_record = WARCRecord("warcinfo", "application/warc-fields")
+        warc_record.set_header("WARC-Filename", filename)
+
+        headers["software"] = "warcforhumans/0.1-alpha " + software
+        headers["format"] = "WARC File Format 1.1"
+        headers["conformsTo"] = "https://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf"
+        headers["python-version"] = "python/" + sys.version.replace("\n", "")
+
+        body = str()
+        for key, value in headers.items():
+            body += f"{key}: {value}\r\n"
+
+        warc_record.set_content(body.encode("utf-8"))
+
+    def write_record(self, record: WARCRecord, write_warcinfo_header: bool = True):
+        if self._warcinfo_record is not None and write_warcinfo_header:
+            record.set_header("WARC-Warcinfo-ID", self._warcinfo_record.get_id())
+
+        for chunk in record.serialize_stream():
+            self.file.write(chunk)
+        self.file.flush()
+
+    def close(self):
+        self.file.close()

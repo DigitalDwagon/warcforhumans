@@ -1,3 +1,5 @@
+import sys
+
 import requests
 import capture.http
 
@@ -9,5 +11,6 @@ if __name__ == "__main__":
     resp = http.request("GET", "https://wiki.archiveteam.org")
     print("Response status:", resp.status)
     print("Body length:", len(resp.data))"""
-    r = requests.get("http://digitaldragon.dev")
+    #r = requests.get("http://digitaldragon.dev", headers={"Accept-Encoding": "identity"})
     #print(r.text)
+    print(sys.version)
