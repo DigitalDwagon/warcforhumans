@@ -110,7 +110,7 @@ class WARCRecord:
             self.content.close()
 
 class WARCFile:
-    def __init__(self, file_path: str, create_warcinfo: bool = True, compressor: Compressor = None):
+    def __init__(self, file_path: str, create_warcinfo: bool = True, warcinfo_headers = None, compressor: Compressor = None):
         self._warcinfo_record = None
         self._pending_records = []
 
@@ -124,7 +124,7 @@ class WARCFile:
         self._compressor.start(self.file)
 
         if create_warcinfo:
-            self.create_warcinfo_record()
+            self.create_warcinfo_record(headers=warcinfo_headers)
 
     def create_warcinfo_record(self, software: str = "", headers: dict[str, str] = None):
         if headers is None:
@@ -163,6 +163,15 @@ class WARCFile:
 
     def discard_last(self):
         self._pending_records = []
+
+    def get_last(self) -> list[WARCRecord]:
+        return self._pending_records
+
+    def discard(self, id: str):
+        for warc_record in self._pending_records:
+            if warc_record.get_id() == id:
+                self._pending_records.remove(warc_record)
+
 
     def flush_pending(self):
         if self._pending_records:
