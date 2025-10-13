@@ -19,9 +19,14 @@ warc_file: WARCFile = None
 
 _original_httpconnection_send = http.client.HTTPConnection.send
 
-def logging_send(self, data):
+def wrapped_send(self, data):
     if not warc_file:
         return _original_httpconnection_send(self, data)
+
+    warc_file.flush_pending()
+
+    if not hasattr(_thread_local, 'request_temp_file'):
+        _thread_local.request_temp_file = tempfile.TemporaryFile()
 
     if self._is_textIO(data):
         # HTTPConnection.send will re-encode this before sending it on.
@@ -30,9 +35,22 @@ def logging_send(self, data):
         encoded_data = b""
         while chunk := data.read(2048):
             encoded_data += chunk.encode("iso-8859-1")
+        data = encoded_data
 
-    warc_file.flush_pending()
-    _cleanup_records()
+    _thread_local.request_temp_file.write(data)
+    return _original_httpconnection_send(self, data)
+
+http.client.HTTPConnection.send = wrapped_send
+
+_original_httpconnection_getresponse = http.client.HTTPConnection.getresponse
+
+def wrapped_getresponse(self, *args, **kwargs):
+    if not warc_file:
+        return _original_httpconnection_getresponse(self, *args, **kwargs)
+    if not hasattr(_thread_local, 'request_temp_file'):
+        raise ValueError("No request data found in thread-local storage")
+
+    temp_file = _thread_local.request_temp_file
 
     # Neither the HTTPConnection nor HTTPResponse store the full URL,
     # so here we have to manually reconstruct it
@@ -59,7 +77,8 @@ def logging_send(self, data):
         url += f":{self.port}"
 
     try:
-        first_line = data.split(b"\r\n", 1)[0]
+        temp_file.seek(0)
+        first_line = temp_file.readline(65537)
         parts = first_line.split(b" ")
         if len(parts) >= 2:
             path = parts[1].decode("utf-8")
@@ -74,21 +93,25 @@ def logging_send(self, data):
 
     # We have to ensure the connection is open here to get the IP address for the WARC headers.
     if self.sock is None:
-        if not self.auto_open:
-            raise http.client.NotConnected()
-        self.connect()
+        raise ValueError("Connection socket is not open")
+
+    hash = hashlib.sha1()
+    temp_file.seek(0)
+    while chunk := temp_file.read(2048):
+        hash.update(chunk)
 
     warc_record = WARCRecord("request", "application/http;msgtype=request")
     warc_record.set_header("WARC-Target-URI", url)
-    warc_record.set_header("WARC-Block-Digest", "sha1:" + hashlib.sha1(data).hexdigest())
+    warc_record.set_header("WARC-Block-Digest", "sha1:" + hash.hexdigest())
     warc_record.add_header("WARC-Protocol", self._http_vsn_str.lower())
     warc_record.add_headers_for_socket(self.sock)
-    warc_record.set_content(data)
+    temp_file.seek(0)
+    warc_record.set_content_stream(temp_file, close=True)
     _thread_local.request_warc_record = warc_record
 
-    return _original_httpconnection_send(self, data)
+    return _original_httpconnection_getresponse(self, *args, **kwargs)
 
-http.client.HTTPConnection.send = logging_send
+http.client.HTTPConnection.getresponse = wrapped_getresponse
 
 class FakeSocket:
     def __init__(self, data: bytes):
@@ -193,7 +216,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     warc_record.set_header("WARC-Payload-Digest", "sha1:" + payload_hash.hexdigest())
     warc_record.add_header("WARC-Protocol", http_version)
     warc_record.add_headers_for_socket(sock)
-    warc_record.set_content_stream(temp_file) # The warc record will close the temp file when the record gets closed
+    warc_record.set_content_stream(temp_file, close=True) # The warc record will close the temp file when the record gets closed
 
     warc_file.next_request_pair(_thread_local.request_warc_record, warc_record)
     _cleanup_records()
@@ -222,3 +245,5 @@ def _cleanup_records():
         del _thread_local.request_warc_record
     if hasattr(_thread_local, 'request_url'):
         del _thread_local.request_url
+    if hasattr(_thread_local, 'request_temp_file'):
+        del _thread_local.request_temp_file
