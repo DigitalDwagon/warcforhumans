@@ -1,4 +1,6 @@
 import io
+import random
+import string
 import sys
 import uuid
 from io import BytesIO, BufferedRandom
@@ -110,7 +112,7 @@ class WARCRecord:
             self.content.close()
 
 class WARCFile:
-    def __init__(self, file_path: str, create_warcinfo: bool = True, warcinfo_headers = None, compressor: Compressor = None):
+    def __init__(self, file_path: str, create_warcinfo: bool = True, warcinfo_headers = None, compressor: Compressor = None, software: str = ""):
         self._warcinfo_record = None
         self._pending_records = []
 
@@ -124,7 +126,7 @@ class WARCFile:
         self._compressor.start(self.file)
 
         if create_warcinfo:
-            self.create_warcinfo_record(headers=warcinfo_headers)
+            self.create_warcinfo_record(headers=warcinfo_headers,software=software)
 
     def create_warcinfo_record(self, software: str = "", headers: dict[str, str] = None):
         if headers is None:
@@ -182,3 +184,71 @@ class WARCFile:
     def close(self):
         self.flush_pending()
         self.file.close()
+
+class WARCWriter:
+    def __init__(self,
+                 prefix: str,
+                 compressor: Compressor = None,
+                 rotate_mb: int = 15*1024,
+                 software: str = "",
+                 warcinfo_headers: dict[str, str] = None
+                 ):
+        self.warc_file = None
+        self.compressor = compressor if compressor else Compressor()
+        self.prefix = prefix
+        self.rotate_mb = rotate_mb
+        self.pending_records: list[WARCRecord] = []
+        self.software = software
+        self.warcinfo_headers = warcinfo_headers
+        self.files_made = 0
+        self.closed = False
+
+    def _create_file(self):
+        if self.warc_file and self.rotate_mb > 0 and self.warc_file.file.tell() >= self.rotate_mb * 1024 * 1024:
+            self.warc_file.close()
+            self.warc_file = None
+        if not self.warc_file:
+            template_data = {"date": datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"),
+                             "number": f"{self.files_made:05d}",
+                             "serial": ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))}
+            name = string.Template(self.prefix).substitute(template_data)
+            self.warc_file = WARCFile(name, compressor=self.compressor, software=self.software, warcinfo_headers=self.warcinfo_headers)
+            self.files_made += 1
+
+    def flush_pending(self):
+        temp = self.pending_records
+        self.pending_records = []
+        self.write_records(temp)
+
+    def discard_pending(self):
+        self.pending_records = []
+
+    def discard(self, record_id):
+        for record in self.pending_records:
+            if record.get_id() == record_id:
+                self.pending_records.remove(record)
+
+
+    def write_record(self, record: WARCRecord):
+        if self.closed:
+            raise ValueError("WARCWriter is closed")
+
+        self._create_file()
+        self.warc_file.write_record(record)
+
+    def write_records(self, records: list[WARCRecord], separate=False):
+        if self.closed:
+            raise ValueError("WARCWriter is closed")
+
+        self._create_file()
+        for record in records:
+            self.warc_file.write_record(record)
+            if separate:
+                self._create_file()
+
+    def close(self):
+        if not self.closed:
+            self.flush_pending()
+            if self.warc_file:
+                self.warc_file.close()
+            self.closed = True

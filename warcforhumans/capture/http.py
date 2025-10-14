@@ -1,12 +1,10 @@
 import http.client
 import io
-import socket
 import threading
-import uuid
 import tempfile
 import hashlib
 
-from warcforhumans.warc.api import WARCRecord, WARCFile
+from warcforhumans.warc.api import WARCRecord, WARCWriter
 
 try:
     import urllib3.connection
@@ -15,15 +13,15 @@ except ImportError:
     has_urllib3 = False
 
 _thread_local = threading.local()
-warc_file: WARCFile = None
+warc_writer: WARCWriter | None = None
 
 _original_httpconnection_send = http.client.HTTPConnection.send
 
 def wrapped_send(self, data):
-    if not warc_file:
+    if not warc_writer:
         return _original_httpconnection_send(self, data)
 
-    warc_file.flush_pending()
+    warc_writer.flush_pending()
 
     if not hasattr(_thread_local, 'request_temp_file'):
         _thread_local.request_temp_file = tempfile.TemporaryFile()
@@ -45,7 +43,7 @@ http.client.HTTPConnection.send = wrapped_send
 _original_httpconnection_getresponse = http.client.HTTPConnection.getresponse
 
 def wrapped_getresponse(self, *args, **kwargs):
-    if not warc_file:
+    if not warc_writer:
         return _original_httpconnection_getresponse(self, *args, **kwargs)
     if not hasattr(_thread_local, 'request_temp_file'):
         raise ValueError("No request data found in thread-local storage")
@@ -95,14 +93,14 @@ def wrapped_getresponse(self, *args, **kwargs):
     if self.sock is None:
         raise ValueError("Connection socket is not open")
 
-    hash = hashlib.sha1()
+    block_digest = hashlib.sha1()
     temp_file.seek(0)
     while chunk := temp_file.read(2048):
-        hash.update(chunk)
+        block_digest.update(chunk)
 
     warc_record = WARCRecord("request", "application/http;msgtype=request")
     warc_record.set_header("WARC-Target-URI", url)
-    warc_record.set_header("WARC-Block-Digest", "sha1:" + hash.hexdigest())
+    warc_record.set_header("WARC-Block-Digest", "sha1:" + block_digest.hexdigest())
     warc_record.add_header("WARC-Protocol", self._http_vsn_str.lower())
     warc_record.add_headers_for_socket(self.sock)
     temp_file.seek(0)
@@ -135,7 +133,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     # read in the full response ourselves.
     # We then write those bytes to a temporary file, and pass it to the original
     # __init__ method with a fake socket object.
-    if not warc_file:
+    if not warc_writer:
         return _original_httpresponse_init(self, sock, debuglevel=debuglevel, method=method, url=url)
 
     if not hasattr(_thread_local, 'request_warc_record'):
@@ -218,7 +216,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     warc_record.add_headers_for_socket(sock)
     warc_record.set_content_stream(temp_file, close=True) # The warc record will close the temp file when the record gets closed
 
-    warc_file.next_request_pair(_thread_local.request_warc_record, warc_record)
+    warc_writer.pending_records.extend([_thread_local.request_warc_record, warc_record])
     _cleanup_records()
 
     temp_file.seek(0) # to let http.client parse the whole response itself
