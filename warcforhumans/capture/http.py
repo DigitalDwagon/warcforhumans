@@ -187,25 +187,36 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
         while True:
             chunk_size_line = fp.readline()
             block_hash.update(chunk_size_line)
-            payload_hash.update(chunk_size_line)
             temp_file.write(chunk_size_line)
             try:
                 chunk_size = int(chunk_size_line.split(b";", 1)[0].strip(), 16)
             except ValueError:
                 break
-            if chunk_size == 0:
-                trailing = fp.read(2) # Read the trailing \r\n
-                temp_file.write(trailing)
-                block_hash.update(trailing)
-                payload_hash.update(trailing)
-                break
-            to_read = chunk_size + 2  # include trailing \r\n
+            to_read = chunk_size
             while to_read > 0:
                 chunk = fp.read(min(2048, to_read))
                 temp_file.write(chunk)
                 block_hash.update(chunk)
+                # The payload hash is defined as the hash of the "entity-body" and therefore doesn't include chunk headers or footers, per RFC 2616 section 3.6
                 payload_hash.update(chunk)
                 to_read -= len(chunk)
+
+            trailing = fp.read(2) # Read the trailing \r\n
+            temp_file.write(trailing)
+            block_hash.update(trailing)
+
+            if chunk_size == 0 and trailing != b"\r\n":
+                while True:
+                    line = fp.readline(65537)
+                    block_hash.update(line)
+                    temp_file.write(line)
+                    if not line or line == b"\r\n":
+                        break
+            if chunk_size == 0:
+                break
+
+
+
 
     temp_file.seek(0)
 
