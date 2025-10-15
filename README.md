@@ -1,48 +1,59 @@
 # warcforhumans
+Note: This project is still a work-in-progress, and has not been extensively tested.
 
 warcforhumans is a Python package that patches Python's native `http.client` to generate WARC files. This allows you to use `http.client` or libraries that rely on it (eg. `requests`, `urllib3`, etc) to write WARCs.
 
-`zstd` compression is supported, with or without dictionaries. `gzip` compression is not yet supported.
-
 # Usage
 
-Quick start:
+Simple example:
 
 ```python
 import requests
-import warcforhumans.http as capture
+import warcforhumans.capture.http as capture
 from warcforhumans.api import WARCWriter
 
-warc_writer = WARCWriter("example")
-capture.warc_file = warc_file
-
+warc_writer = WARCWriter("example", rotate_mb=0)
+capture.warc_writer = warc_writer
 r = requests.get("http://digitaldragon.dev")
-warc_file.close()
+warc_writer.close()
+
 ```
 
 With ZSTD compression:
 
 ```python
 import requests
-import warcforhumans.http as capture
-from warcforhumans.api import WARCFile
+import warcforhumans.capture.http as capture
+from warcforhumans.api import WARCWriter
 from warcforhumans.compression import ZSTDCompressor
 
-warc_file = WARCFile("example", compressor=ZSTDCompressor(level=11))
-# or with a dictionary:
-dictionary = open("dictionary.zstdict", "rb").read()
-warc_file = WARCFile("example", compressor=ZSTDCompressor(dictionary=dictionary, level=11))
-
-capture.warc_file = warc_file
+warc_writer = WARCWriter("example-$date-$number-$serial",
+                         compressor=ZSTDCompressor(level=11),
+                         warcinfo_headers={"operator": "some person"},
+                         software="example-script/0.1")
+capture.warc_writer = warc_writer
 r = requests.get("http://digitaldragon.dev")
-warc_file.close()
+warc_writer.close()
 ```
 
-Need to skip saving a response to WARC?
-```python
-warc_file.discard_last()
+or a ZSTD dictionary
 
-# Warning: This is not necessarily thread safe. Use .get_last() and then .discard(ID) as a safer alternative 
+```python
+import requests
+import warcforhumans.capture.http as capture
+from warcforhumans.api import WARCWriter
+from warcforhumans.compression import ZSTDCompressor
+
+with open("dictionary.zstdict", "rb") as f:
+    dictionary = f.read()
+
+warc_writer = WARCWriter("example-$date-$number-$serial",
+                         compressor=ZSTDCompressor(level=11, dictionary=dictionary),
+                         warcinfo_headers={"operator": "some person"},
+                         software="example-script/0.1")
+capture.warc_writer = warc_writer
+r = requests.get("http://digitaldragon.dev")
+warc_writer.close()
 ```
 
 

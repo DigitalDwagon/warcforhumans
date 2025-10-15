@@ -14,8 +14,7 @@ class Compressor:
 class ZSTDCompressor(Compressor):
     def __init__(self, dictionary = None, level: int = 11):
         self.level = level
-        if dictionary:
-            self.dict = dictionary
+        self.dict = dictionary
 
         # detect if dictionary is zstd-compressed
 
