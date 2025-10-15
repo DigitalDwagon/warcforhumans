@@ -1,3 +1,4 @@
+import base64
 import http.client
 import io
 import threading
@@ -100,7 +101,7 @@ def wrapped_getresponse(self, *args, **kwargs):
 
     warc_record = WARCRecord("request", "application/http;msgtype=request")
     warc_record.set_header("WARC-Target-URI", url)
-    warc_record.set_header("WARC-Block-Digest", "sha1:" + block_digest.hexdigest())
+    warc_record.set_header("WARC-Block-Digest", get_hash_string(block_digest))
     warc_record.add_header("WARC-Protocol", self._http_vsn_str.lower())
     warc_record.add_headers_for_socket(self.sock)
     temp_file.seek(0)
@@ -206,21 +207,40 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
                 payload_hash.update(chunk)
                 to_read -= len(chunk)
 
-    temp_file.seek(0) # Required regularly for reading
+    temp_file.seek(0)
+
     warc_record = WARCRecord("response", "application/http;msgtype=response")
     warc_record.set_header("WARC-Target-URI", _thread_local.request_url)
     warc_record.set_header("WARC-Concurrent-To", _thread_local.request_warc_record.get_id())
-    warc_record.set_header("WARC-Block-Digest", "sha1:" + block_hash.hexdigest())
-    warc_record.set_header("WARC-Payload-Digest", "sha1:" + payload_hash.hexdigest())
+    warc_record.set_header("WARC-Block-Digest", get_hash_string(block_hash))
+    warc_record.set_header("WARC-Payload-Digest", get_hash_string(payload_hash))
     warc_record.add_header("WARC-Protocol", http_version)
     warc_record.add_headers_for_socket(sock)
-    warc_record.set_content_stream(temp_file, close=True) # The warc record will close the temp file when the record gets closed
+
+    close_file = False
+    revisit, headers = warc_writer.check_for_revisit(get_hash_string(payload_hash))
+    if revisit:
+        warc_record.set_type("revisit")
+        warc_record.add_headers(headers)
+        content = b""
+        # revisit content is up to the end of the header block
+        while True:
+            line = temp_file.readline(65537)
+            content += line
+            if not line or line == b"\r\n":
+                break
+        warc_record.set_content(content)
+        close_file = True
+    else:
+        warc_record.set_content_stream(temp_file, close=True) # The warc record will close the temp file when the record gets closed
 
     warc_writer.pending_records.extend([_thread_local.request_warc_record, warc_record])
     _cleanup_records()
 
     temp_file.seek(0) # to let http.client parse the whole response itself
     _original_httpresponse_init(self, sock=FakeSocket(temp_file.read()), debuglevel=debuglevel, method=method, url=url)
+    if close_file:
+        temp_file.close()
 
 http.client.HTTPResponse.__init__ = httpresponse_init
 
@@ -245,3 +265,6 @@ def _cleanup_records():
         del _thread_local.request_url
     if hasattr(_thread_local, 'request_temp_file'):
         del _thread_local.request_temp_file
+
+def get_hash_string(hash) -> str:
+    return "sha1:" + base64.b32encode(hash.digest()).decode("utf-8")

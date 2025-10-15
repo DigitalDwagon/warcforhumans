@@ -39,9 +39,8 @@ class WARCRecord:
         else:
             self.headers[key] = [value]
 
-    def set_headers(self, headers: dict[str, str]):
-        for key, value in headers.items():
-            self.set_header(key, value)
+    def add_headers(self, headers: dict[str, list[str]]):
+        self.headers.update(headers)
 
     def set_type(self, type: str):
         valid_warc_record_types = {"warcinfo", "response", "resource", "request", "metadata", "revisit", "conversion",
@@ -69,6 +68,8 @@ class WARCRecord:
             self.set_header("WARC-Record-ID", f"<{str(uuid.uuid4().urn)}>")
         return self.headers["WARC-Record-ID"][0]
 
+    def get_type(self) -> str | None:
+        return self.headers["WARC-Type"][0]
 
     def add_headers_for_socket(self, sock: socket):
         self.set_header("WARC-IP-Address", sock.getpeername()[0])
@@ -157,32 +158,7 @@ class WARCFile:
         record.close()
         self.file.flush()
 
-    def next_request_pair(self, request: WARCRecord, response: WARCRecord):
-        self.flush_pending()
-
-        self._pending_records.append(request)
-        self._pending_records.append(response)
-
-    def discard_last(self):
-        self._pending_records = []
-
-    def get_last(self) -> list[WARCRecord]:
-        return self._pending_records
-
-    def discard(self, id: str):
-        for warc_record in self._pending_records:
-            if warc_record.get_id() == id:
-                self._pending_records.remove(warc_record)
-
-
-    def flush_pending(self):
-        if self._pending_records:
-            for record in self._pending_records:
-                self.write_record(record)
-            self._pending_records = []
-
     def close(self):
-        self.flush_pending()
         self.file.close()
 
 class WARCWriter:
@@ -191,7 +167,8 @@ class WARCWriter:
                  compressor: Compressor = None,
                  rotate_mb: int = 15*1024,
                  software: str = "",
-                 warcinfo_headers: dict[str, str] = None
+                 warcinfo_headers: dict[str, str] = None,
+                 revisit: bool = True
                  ):
         self.warc_file = None
         self.compressor = compressor if compressor else Compressor()
@@ -202,9 +179,16 @@ class WARCWriter:
         self.warcinfo_headers = warcinfo_headers
         self.files_made = 0
         self.closed = False
+        self.revisit = revisit
+        if revisit:
+            self.revisit_cache: dict[str, tuple[str, str, str]] = {} # payload-digest -> (warc-record-id, warc-date, warc-target-uri)
 
-    def _create_file(self):
-        if self.warc_file and self.rotate_mb > 0 and self.warc_file.file.tell() >= self.rotate_mb * 1024 * 1024:
+    def _create_file(self, rotate = True):
+        if (    self.warc_file
+                and rotate
+                and self.rotate_mb > 0
+                and self.warc_file.file.tell() >= self.rotate_mb * 1024 * 1024
+           ):
             self.warc_file.close()
             self.warc_file = None
         if not self.warc_file:
@@ -229,22 +213,40 @@ class WARCWriter:
                 self.pending_records.remove(record)
 
 
-    def write_record(self, record: WARCRecord):
+    def write_record(self, record: WARCRecord, rotate = True):
         if self.closed:
             raise ValueError("WARCWriter is closed")
 
         self._create_file()
+        if self.revisit and record.get_type() == "response":
+            payload_digest = record.headers.get("WARC-Payload-Digest", [None])[0]
+            date = record.headers.get("WARC-Date", [None])[0]
+            target_uri = record.headers.get("WARC-Target-URI", [None])[0]
+            record_id = record.get_id()
+            if payload_digest and date and target_uri:
+                self.revisit_cache[payload_digest] = (record_id, date, target_uri)
+
         self.warc_file.write_record(record)
 
-    def write_records(self, records: list[WARCRecord], separate=False):
-        if self.closed:
-            raise ValueError("WARCWriter is closed")
+    def check_for_revisit(self, payload_digest: str) -> tuple[bool, dict[str, list[str]]]:
+        if not self.revisit:
+            return False, {}
 
-        self._create_file()
+        if not payload_digest in self.revisit_cache:
+            return False, {}
+
+        record_id, date, target_uri = self.revisit_cache[payload_digest]
+        headers = {
+            "WARC-Refers-To": [record_id],
+            "WARC-Refers-To-Date": [date],
+            "WARC-Refers-To-Target-URI": [target_uri]
+        }
+        return True, headers
+
+
+    def write_records(self, records: list[WARCRecord], rotate_between=False):
         for record in records:
-            self.warc_file.write_record(record)
-            if separate:
-                self._create_file()
+            self.write_record(record, rotate=rotate_between)
 
     def close(self):
         if not self.closed:
