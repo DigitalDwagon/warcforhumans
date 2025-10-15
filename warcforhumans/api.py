@@ -3,12 +3,13 @@ import random
 import string
 import sys
 import uuid
-from io import BytesIO, BufferedRandom
 from datetime import datetime, timezone
+from importlib.metadata import version
+from io import BufferedRandom
 from socket import socket
 from ssl import SSLSocket
 
-from warcforhumans.warc.compression import Compressor
+from warcforhumans.compression import Compressor
 
 
 class WARCRecord:
@@ -136,7 +137,7 @@ class WARCFile:
         warc_record = WARCRecord("warcinfo", "application/warc-fields")
         warc_record.set_header("WARC-Filename", self.file.name)
 
-        headers["software"] = "warcforhumans/0.1-alpha " + software
+        headers["software"] = f"warcforhumans/{version("warcforhumans")} {software}"
         headers["format"] = "WARC File Format 1.1"
         headers["conformsTo"] = "https://bibnum.bnf.fr/WARC/WARC_ISO_28500_version1-1_latestdraft.pdf"
         headers["python-version"] = "python/" + sys.version.replace("\n", "")

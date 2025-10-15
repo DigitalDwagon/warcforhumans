@@ -1,1 +1,4 @@
 .idea/
+# https://python-poetry.org/docs/basic-usage/#committing-your-poetrylock-file-to-version-control
+poetry.lock
+dist/

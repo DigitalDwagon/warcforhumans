@@ -7,12 +7,13 @@ warcforhumans is a Python package that patches Python's native `http.client` to 
 # Usage
 
 Quick start:
+
 ```python
 import requests
-import warcforhumans.capture.http as capture
-from warcforhumans.warc.api import WARCFile
+import warcforhumans.http as capture
+from warcforhumans.api import WARCWriter
 
-warc_file = WARCFile("example")
+warc_writer = WARCWriter("example")
 capture.warc_file = warc_file
 
 r = requests.get("http://digitaldragon.dev")
@@ -20,11 +21,12 @@ warc_file.close()
 ```
 
 With ZSTD compression:
+
 ```python
 import requests
-import warcforhumans.capture.http as capture
-from warcforhumans.warc.api import WARCFile
-from warcforhumans.warc.compression import ZSTDCompressor
+import warcforhumans.http as capture
+from warcforhumans.api import WARCFile
+from warcforhumans.compression import ZSTDCompressor
 
 warc_file = WARCFile("example", compressor=ZSTDCompressor(level=11))
 # or with a dictionary:

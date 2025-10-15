@@ -1,5 +1,3 @@
-import shutil
-
 import zstandard as zstd
 
 class Compressor:

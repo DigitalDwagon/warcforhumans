@@ -1,11 +1,11 @@
 import base64
+import hashlib
 import http.client
 import io
-import threading
 import tempfile
-import hashlib
+import threading
 
-from warcforhumans.warc.api import WARCRecord, WARCWriter
+from warcforhumans.api import WARCRecord, WARCWriter
 
 try:
     import urllib3.connection
