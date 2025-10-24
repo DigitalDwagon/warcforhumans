@@ -43,3 +43,16 @@ class ZSTDCompressor(Compressor):
         size = len(self.dict)
         file.write(size.to_bytes(4, 'little'))
         file.write(self.dict)
+
+class GZIPCompressor(Compressor):
+    def __init__(self, level: int = 6):
+        self.level = level
+
+    def write_record(self, record, file):
+        import gzip
+        with gzip.GzipFile(fileobj=file, mode='ab', compresslevel=self.level) as gz_file:
+            for chunk in record.serialize_stream():
+                gz_file.write(chunk)
+
+    def file_extension(self) -> str:
+        return ".gz"
