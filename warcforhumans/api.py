@@ -13,6 +13,32 @@ from warcforhumans.compression import Compressor
 
 
 class WARCRecord:
+    WARC_RECORD_ID = "WARC-Record-ID"
+    CONTENT_LENGTH = "Content-Length"
+    WARC_DATE = "WARC-Date"
+    WARC_TYPE = "WARC-Type"
+    CONTENT_TYPE = "Content-Type"
+    CONTENT_HTTP_REQUEST = "application/http;msgtype=request"
+    CONTENT_HTTP_RESPONSE = "application/http;msgtype=response"
+    WARC_CONCURRENT_TO = "WARC-Concurrent-To"
+    WARC_BLOCK_DIGEST = "WARC-Block-Digest"
+    WARC_PAYLOAD_DIGEST = "WARC-Payload-Digest"
+    WARC_IP_ADDRESS = "WARC-IP-Address"
+    WARC_REFERS_TO = "WARC-Refers-To"
+    WARC_REFERS_TO_TARGET_URI = "WARC-Refers-To-Target-URI"
+    WARC_REFERS_TO_DATE = "WARC-Refers-To-Date"
+    WARC_TARGET_URI = "WARC-Target-URI"
+    WARC_TRUNCATED = "WARC-Truncated"
+    WARC_WARCINFO_ID = "WARC-Warcinfo-ID"
+    WARC_FILENAME = "WARC-Filename"
+    WARC_PROFILE = "WARC-Profile"
+    WARC_IDENTIFIED_PAYLOAD_TYPE = "WARC-Identified-Payload-Type"
+    WARC_SEGMENT_NUMBER = "WARC-Segment-Number"
+    WARC_SEGMENT_ORIGIN_ID = "WARC-Segment-Origin-ID"
+    WARC_SEGMENT_TOTAL_LENGTH = "WARC-Segment-Total-Length"
+    WARC_PROTOCOL = "WARC-Protocol" # https://github.com/iipc/warc-specifications/issues/42
+    WARC_CIPHER_SUITE = "WARC-Cipher-Suite" # https://github.com/iipc/warc-specifications/issues/86
+
     def __init__(self, type: str = None, content_type: str = None):
         # https://iipc.github.io/warc-specifications/specifications/warc-format/warc-1.1-annotated/#warc-type-mandatory
 
@@ -26,7 +52,7 @@ class WARCRecord:
             self.date_now()
 
         if content_type is not None:
-            self.set_header("Content-Type", content_type)
+            self.set_header(WARCRecord.CONTENT_TYPE, content_type)
 
     def set_header(self, key: str, value):
         if isinstance(value, list):
@@ -49,42 +75,46 @@ class WARCRecord:
         if type not in valid_warc_record_types:
             raise ValueError(f"Invalid WARC record type: {type}")
 
-        self.set_header("WARC-Type", type)
+        self.set_header(WARCRecord.WARC_TYPE, type)
 
-    def set_content(self, content: bytes):
+    def set_content(self, content: bytes, type: str = None):
         self.content = content
-        self.set_header("Content-Length", str(len(content)))
+        self.set_header(WARCRecord.CONTENT_LENGTH, str(len(content)))
+        if type:
+            self.set_header(WARCRecord.CONTENT_TYPE, type)
 
-    def set_content_stream(self, stream: BufferedRandom, close: bool = False):
+    def set_content_stream(self, stream: BufferedRandom, type: str = None, close: bool = False):
+        if type:
+            self.set_header(WARCRecord.CONTENT_TYPE, type)
         self.content = stream
         stream.seek(0, io.SEEK_END)
-        self.set_header("Content-Length", str((stream.tell())))
+        self.set_header(WARCRecord.CONTENT_LENGTH, str((stream.tell())))
         self._close_content_stream = close
 
     def date_now(self):
-        self.set_header("WARC-Date", datetime.now(timezone.utc).isoformat(timespec='seconds'))
+        self.set_header(WARCRecord.WARC_DATE, datetime.now(timezone.utc).isoformat(timespec='seconds'))
 
     def get_id(self) -> str:
-        if "WARC-Record-ID" not in self.headers:
-            self.set_header("WARC-Record-ID", f"<{str(uuid.uuid4().urn)}>")
-        return self.headers["WARC-Record-ID"][0]
+        if WARCRecord.WARC_RECORD_ID not in self.headers:
+            self.set_header(WARCRecord.WARC_RECORD_ID, f"<{str(uuid.uuid4().urn)}>")
+        return self.headers[WARCRecord.WARC_RECORD_ID][0]
 
     def get_type(self) -> str | None:
-        return self.headers["WARC-Type"][0]
+        return self.headers[WARCRecord.WARC_TYPE][0]
 
     def add_headers_for_socket(self, sock: socket):
-        self.set_header("WARC-IP-Address", sock.getpeername()[0])
+        self.set_header(WARCRecord.WARC_IP_ADDRESS, sock.getpeername()[0])
 
         if isinstance(sock, SSLSocket):
             encryption_protocol, version = sock.cipher()[1].split("v")
-            self.add_header("WARC-Protocol", encryption_protocol.lower() + "/" + version)
-            self.add_header("WARC-Cipher-Suite", sock.cipher()[0])
+            self.add_header(WARCRecord.WARC_PROTOCOL, encryption_protocol.lower() + "/" + version)
+            self.add_header(WARCRecord.WARC_CIPHER_SUITE, sock.cipher()[0])
 
     def serialize_stream(self):
         if self.content is None:
             raise ValueError("Content is not set")
 
-        mandatory_headers = ["WARC-Record-ID", "Content-Length", "WARC-Date", "WARC-Type"]
+        mandatory_headers = [WARCRecord.WARC_RECORD_ID, WARCRecord.CONTENT_LENGTH, WARCRecord.WARC_DATE, WARCRecord.WARC_TYPE]
         for header in mandatory_headers:
             if header not in self.headers:
                 raise ValueError(f"Mandatory header {header} is missing")
@@ -135,7 +165,7 @@ class WARCFile:
             headers = {}
 
         warc_record = WARCRecord("warcinfo", "application/warc-fields")
-        warc_record.set_header("WARC-Filename", self.file.name)
+        warc_record.set_header(WARCRecord.WARC_FILENAME, self.file.name)
 
         headers["software"] = f"warcforhumans/{version("warcforhumans")} {software}"
         headers["format"] = "WARC File Format 1.1"
@@ -152,7 +182,7 @@ class WARCFile:
 
     def write_record(self, record: WARCRecord, write_warcinfo_header: bool = True):
         if self._warcinfo_record is not None and write_warcinfo_header:
-            record.set_header("WARC-Warcinfo-ID", self._warcinfo_record.get_id())
+            record.set_header(WARCRecord.WARC_WARCINFO_ID, self._warcinfo_record.get_id())
 
         self._compressor.write_record(record, self.file)
 
@@ -220,9 +250,9 @@ class WARCWriter:
 
         self._create_file()
         if self.revisit and record.get_type() == "response":
-            payload_digest = record.headers.get("WARC-Payload-Digest", [None])[0]
-            date = record.headers.get("WARC-Date", [None])[0]
-            target_uri = record.headers.get("WARC-Target-URI", [None])[0]
+            payload_digest = record.headers.get(WARCRecord.WARC_PAYLOAD_DIGEST, [None])[0]
+            date = record.headers.get(WARCRecord.WARC_DATE, [None])[0]
+            target_uri = record.headers.get(WARCRecord.WARC_TARGET_URI, [None])[0]
             record_id = record.get_id()
             if payload_digest and date and target_uri:
                 self.revisit_cache[payload_digest] = (record_id, date, target_uri)
@@ -238,9 +268,9 @@ class WARCWriter:
 
         record_id, date, target_uri = self.revisit_cache[payload_digest]
         headers = {
-            "WARC-Refers-To": [record_id],
-            "WARC-Refers-To-Date": [date],
-            "WARC-Refers-To-Target-URI": [target_uri]
+            WARCRecord.WARC_REFERS_TO: [record_id],
+            WARCRecord.WARC_REFERS_TO_DATE: [date],
+            WARCRecord.WARC_REFERS_TO_TARGET_URI: [target_uri]
         }
         return True, headers
 
