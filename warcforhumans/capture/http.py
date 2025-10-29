@@ -99,13 +99,11 @@ def wrapped_getresponse(self, *args, **kwargs):
     while chunk := temp_file.read(2048):
         block_digest.update(chunk)
 
-    warc_record = WARCRecord("request", "application/http;msgtype=request")
-    warc_record.set_header("WARC-Target-URI", url)
-    warc_record.set_header("WARC-Block-Digest", get_hash_string(block_digest))
-    warc_record.add_header("WARC-Protocol", self._http_vsn_str.lower())
-    warc_record.add_headers_for_socket(self.sock)
+    warc_record = WARCRecord("request", url=url, sock=self.sock)
+    warc_record.set_header(WARCRecord.WARC_BLOCK_DIGEST, get_hash_string(block_digest))
+    warc_record.add_header(WARCRecord.WARC_PROTOCOL, self._http_vsn_str.lower())
     temp_file.seek(0)
-    warc_record.set_content_stream(temp_file, close=True)
+    warc_record.set_content_stream(temp_file, type=WARCRecord.CONTENT_HTTP_REQUEST, close=True)
     _thread_local.request_warc_record = warc_record
 
     return _original_httpconnection_getresponse(self, *args, **kwargs)
@@ -220,13 +218,11 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
 
     temp_file.seek(0)
 
-    warc_record = WARCRecord("response", "application/http;msgtype=response")
-    warc_record.set_header("WARC-Target-URI", _thread_local.request_url)
-    warc_record.set_header("WARC-Concurrent-To", _thread_local.request_warc_record.get_id())
-    warc_record.set_header("WARC-Block-Digest", get_hash_string(block_hash))
-    warc_record.set_header("WARC-Payload-Digest", get_hash_string(payload_hash))
-    warc_record.add_header("WARC-Protocol", http_version)
-    warc_record.add_headers_for_socket(sock)
+    warc_record = WARCRecord("response", content_type = WARCRecord.CONTENT_HTTP_RESPONSE, url = _thread_local.request_url, sock = sock)
+    warc_record.concurrent(_thread_local.request_warc_record)
+    warc_record.set_header(WARCRecord.WARC_BLOCK_DIGEST, get_hash_string(block_hash))
+    warc_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, get_hash_string(payload_hash))
+    warc_record.add_header(WARCRecord.WARC_PROTOCOL, http_version)
 
     close_file = False
     revisit, headers = warc_writer.check_for_revisit(get_hash_string(payload_hash))

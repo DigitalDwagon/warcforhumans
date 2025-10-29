@@ -39,7 +39,7 @@ class WARCRecord:
     WARC_PROTOCOL = "WARC-Protocol" # https://github.com/iipc/warc-specifications/issues/42
     WARC_CIPHER_SUITE = "WARC-Cipher-Suite" # https://github.com/iipc/warc-specifications/issues/86
 
-    def __init__(self, type: str = None, content_type: str = None):
+    def __init__(self, type: str = None, content_type: str = None, url: str = None, sock: socket = None):
         # https://iipc.github.io/warc-specifications/specifications/warc-format/warc-1.1-annotated/#warc-type-mandatory
 
         self.headers: dict[str, list[str]] = {}
@@ -53,6 +53,12 @@ class WARCRecord:
 
         if content_type is not None:
             self.set_header(WARCRecord.CONTENT_TYPE, content_type)
+
+        if url is not None:
+            self.set_header(WARCRecord.WARC_TARGET_URI, url)
+
+        if socket:
+            self.add_headers_for_socket(sock)
 
     def set_header(self, key: str, value):
         if isinstance(value, list):
@@ -110,6 +116,10 @@ class WARCRecord:
             self.add_header(WARCRecord.WARC_PROTOCOL, encryption_protocol.lower() + "/" + version)
             self.add_header(WARCRecord.WARC_CIPHER_SUITE, sock.cipher()[0])
 
+    def concurrent(self, record):
+        self.set_header(WARCRecord.WARC_CONCURRENT_TO, record.get_id())
+        record.set_header(WARCRecord.WARC_CONCURRENT_TO, self.get_id())
+
     def serialize_stream(self):
         if self.content is None:
             raise ValueError("Content is not set")
@@ -125,11 +135,10 @@ class WARCRecord:
                 yield f"{key}: {v}\r\n".encode("utf-8")
         yield b"\r\n"
 
-        # Stream the content in chunks
         if isinstance(self.content, bytes):
             yield self.content
         else:
-            chunk_size = 8192  # Define a chunk size
+            chunk_size = 8192 # todo we should use a set chunk size everywhere
             self.content.seek(0)
             while True:
                 chunk = self.content.read(chunk_size)
