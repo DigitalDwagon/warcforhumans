@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import io
 import random
 import string
@@ -57,7 +59,7 @@ class WARCRecord:
         if url is not None:
             self.set_header(WARCRecord.WARC_TARGET_URI, url)
 
-        if socket:
+        if sock is not None:
             self.add_headers_for_socket(sock)
 
     def set_header(self, key: str, value):
@@ -83,19 +85,34 @@ class WARCRecord:
 
         self.set_header(WARCRecord.WARC_TYPE, type)
 
-    def set_content(self, content: bytes, type: str = None):
+    def set_content(self, content: bytes, type: str = None, block_digest = None):
         self.content = content
         self.set_header(WARCRecord.CONTENT_LENGTH, str(len(content)))
+
         if type:
             self.set_header(WARCRecord.CONTENT_TYPE, type)
 
-    def set_content_stream(self, stream: BufferedRandom, type: str = None, close: bool = False):
+        if not block_digest:
+            block_digest = hashlib.sha512(content)
+        self.set_header(WARCRecord.WARC_BLOCK_DIGEST, hash_to_string(block_digest))
+
+
+    def set_content_stream(self, stream: BufferedRandom, type: str = None, close: bool = False, block_digest = None):
         if type:
             self.set_header(WARCRecord.CONTENT_TYPE, type)
+
         self.content = stream
         stream.seek(0, io.SEEK_END)
         self.set_header(WARCRecord.CONTENT_LENGTH, str((stream.tell())))
         self._close_content_stream = close
+
+        if not block_digest:
+            block_digest = hashlib.sha512()
+            stream.seek(0)
+            while chunk := stream.read(2048):
+                block_digest.update(chunk)
+
+        self.set_header(WARCRecord.WARC_BLOCK_DIGEST, hash_to_string(block_digest))
 
     def date_now(self):
         self.set_header(WARCRecord.WARC_DATE, datetime.now(timezone.utc).isoformat(timespec='seconds'))
@@ -294,3 +311,11 @@ class WARCWriter:
             if self.warc_file:
                 self.warc_file.close()
             self.closed = True
+
+def hash_to_string(h) -> str:
+    if h.name == "md5":
+        # Typical encoding of md5 is lowercase base16
+        # https://github.com/iipc/warc-specifications/issues/80#issuecomment-1637084423
+        return f"{h.name}:{h.hexdigest()}"
+
+    return f"{h.name}:{base64.b32encode(h.digest()).decode("utf-8")}"
