@@ -134,26 +134,29 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
         raise ValueError("No request record found in thread-local storage")
 
     fp = sock.makefile("rb", buffering=0)
-    temp_file = tempfile.TemporaryFile()
+    temp_file = tempfile.TemporaryFile() # NOTE: temp_file will be written to warc verbatim as the response content, don't manipulate it
 
     block_hash = hashlib.sha512()
 
     # Read up through the end of the header block.
+    header_content = b"" # NOTE: header_content will be written to warc verbatim when writing revisit records, don't manipulate it
     while True:
         line = fp.readline(65537)
         block_hash.update(line)
         temp_file.write(line)
+        header_content += line
         if not line or line == b"\r\n":
             break
 
-    temp_file.seek(0)
     content_length = None
     transfer_encoding = None
 
-    # Have to grab the HTTP version from the status line for WARC headers
-    http_version = temp_file.readline(65537).decode("utf-8").split(" ", 1)[0].lower()
 
-    for header in temp_file:
+    headers = header_content.split(b"\r\n")
+    # Have to grab the HTTP version from the status line for WARC headers
+    http_version = headers[0].decode("utf-8").split(" ", 1)[0].lower()
+
+    for header in headers:
         # TODO: this header parsing could probably be more robust
         if header.lower().startswith(b"content-length:"):
             try:
@@ -163,7 +166,6 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
         elif header.lower().startswith(b"transfer-encoding:"):
             transfer_encoding = header.split(b":", 1)[1].strip().lower()
 
-    temp_file.seek(0, io.SEEK_END)
     payload_hash = hashlib.sha512()
 
     # TODO: What if the connection times out or is closed early?
@@ -208,54 +210,29 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
             if chunk_size == 0:
                 break
 
+    revisit, headers = warc_writer.check_for_revisit(warc.hash_to_string(payload_hash))
 
+    if revisit:
+        warc_record = WARCRecord("revisit", content_type = WARCRecord.CONTENT_HTTP_RESPONSE, url = _thread_local.request_url, sock = sock)
+        warc_record.add_headers(headers)
+        warc_record.set_content(header_content) # does not use the block_hash since that would include the response body
+    else:
+        warc_record = WARCRecord("response", content_type = WARCRecord.CONTENT_HTTP_RESPONSE, url = _thread_local.request_url, sock = sock)
+        warc_record.set_content_stream(temp_file, close=True, block_digest=block_hash)
 
-
-    temp_file.seek(0)
-
-    warc_record = WARCRecord("response", content_type = WARCRecord.CONTENT_HTTP_RESPONSE, url = _thread_local.request_url, sock = sock)
     warc_record.concurrent(_thread_local.request_warc_record)
     warc_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, warc.hash_to_string(payload_hash))
     warc_record.add_header(WARCRecord.WARC_PROTOCOL, http_version)
-
-    close_file = False
-    revisit, headers = warc_writer.check_for_revisit(warc.hash_to_string(payload_hash))
-    if revisit:
-        warc_record.set_type("revisit")
-        warc_record.add_headers(headers)
-        content = b""
-        # revisit content is up to the end of the header block
-        while True:
-            line = temp_file.readline(65537)
-            content += line
-            if not line or line == b"\r\n":
-                break
-        warc_record.set_content(content, block_digest=block_hash)
-        close_file = True
-    else:
-        warc_record.set_content_stream(temp_file, close=True) # The warc record will close the temp file when the record gets closed
 
     warc_writer.pending_records.extend([_thread_local.request_warc_record, warc_record])
     _cleanup_records()
 
     temp_file.seek(0) # to let http.client parse the whole response itself
     _original_httpresponse_init(self, sock=FakeSocket(temp_file.read()), debuglevel=debuglevel, method=method, url=url)
-    if close_file:
+    if revisit:
         temp_file.close()
 
 http.client.HTTPResponse.__init__ = httpresponse_init
-
-"""
-_original_httpconnection_putrequest = http.client.HTTPConnection.putrequest
-
-def logging_putrequest(self, method, url, *args, **kwargs):
-    print(f"[HTTPConnection.putrequest] Method: {method}, URL: {url}")
-    return _original_httpconnection_putrequest(self, method, url, *args, **kwargs)
-
-
-http.client.HTTPConnection.putrequest = logging_putrequest
-"""
-
 
 def _cleanup_records():
     if hasattr(_thread_local, 'response_warc_record'):
