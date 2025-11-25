@@ -29,7 +29,7 @@ from warcforhumans.compression import ZSTDCompressor
 
 warc_writer = WARCWriter("example-$date-$number-$serial",
                          compressor=ZSTDCompressor(level=11),
-                         warcinfo_headers={"operator": "some person"},
+                         warcinfo_fields={"operator": "some person"},
                          software="example-script/0.1")
 capture.warc_writer = warc_writer
 r = requests.get("http://digitaldragon.dev")
@@ -49,7 +49,7 @@ with open("dictionary.zstdict", "rb") as f:
 
 warc_writer = WARCWriter("example-$date-$number-$serial",
                          compressor=ZSTDCompressor(level=11, dictionary=dictionary),
-                         warcinfo_headers={"operator": "some person"},
+                         warcinfo_fields={"operator": "some person"},
                          software="example-script/0.1")
 capture.warc_writer = warc_writer
 r = requests.get("http://digitaldragon.dev")
