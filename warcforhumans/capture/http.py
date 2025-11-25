@@ -207,6 +207,15 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
                         break
             if chunk_size == 0:
                 break
+    else:
+        # Read until the server closes the connection
+        while True:
+            chunk = fp.read(2048)
+            if not chunk:
+                break
+            temp_file.write(chunk)
+            block_hash.update(chunk)
+            payload_hash.update(chunk)
 
     revisit, headers = warc_writer.check_for_revisit(warc.hash_to_string(payload_hash))
 
