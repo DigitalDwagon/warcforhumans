@@ -16,5 +16,14 @@ build-backend = "poetry.core.masonry.api"
 
 [dependency-groups]
 dev = [
-    "requests (>=2.32.5,<3.0.0)"
+    "requests (>=2.32.5,<3.0.0)",
+    "pytest"
 ]
+
+[tool.pytest]
+minversion = "9.0"
+addopts = ["-ra", "-q"]
+testpaths = [
+    "tests"
+]
+
