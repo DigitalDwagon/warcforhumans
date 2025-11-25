@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import http.client
 import io
@@ -97,8 +96,7 @@ def wrapped_getresponse(self, *args, **kwargs):
 
     warc_record = WARCRecord("request", url=url, sock=self.sock)
     warc_record.add_header(WARCRecord.WARC_PROTOCOL, self._http_vsn_str.lower())
-    temp_file.seek(0)
-    warc_record.set_content_stream(temp_file, type=WARCRecord.CONTENT_HTTP_REQUEST, close=True)
+    warc_record.set_content(temp_file, content_type=WARCRecord.CONTENT_HTTP_REQUEST, close=True)
     _thread_local.request_warc_record = warc_record
 
     return _original_httpconnection_getresponse(self, *args, **kwargs)
@@ -218,7 +216,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
         warc_record.set_content(header_content) # does not use the block_hash since that would include the response body
     else:
         warc_record = WARCRecord("response", content_type = WARCRecord.CONTENT_HTTP_RESPONSE, url = _thread_local.request_url, sock = sock)
-        warc_record.set_content_stream(temp_file, close=True, block_digest=block_hash)
+        warc_record.set_content(temp_file, close=True, block_digest=block_hash)
 
     warc_record.concurrent(_thread_local.request_warc_record)
     warc_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, warc.hash_to_string(payload_hash))
