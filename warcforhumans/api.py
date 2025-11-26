@@ -155,7 +155,7 @@ class WARCRecord:
         Sets the timestamp of the WARC to the current time.
         :return:
         """
-        self.set_header(WARCRecord.WARC_DATE, datetime.now(timezone.utc).isoformat(timespec='seconds'))
+        self.set_header(WARCRecord.WARC_DATE, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
 
     def get_id(self) -> str:
         """
