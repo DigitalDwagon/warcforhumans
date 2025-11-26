@@ -231,7 +231,8 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     warc_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, warc.hash_to_string(payload_hash))
     warc_record.add_header(WARCRecord.WARC_PROTOCOL, http_version)
 
-    warc_writer.pending_records.extend([_thread_local.request_warc_record, warc_record])
+    # The response record is intentionally written before the request record to help with wayback indexing.
+    warc_writer.pending_records.extend([warc_record, _thread_local.request_warc_record])
     _cleanup_records()
 
     temp_file.seek(0) # to let http.client parse the whole response itself
