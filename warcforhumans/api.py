@@ -104,7 +104,7 @@ class WARCRecord:
         if record_type not in valid_warc_record_types:
             raise ValueError(f"Invalid WARC record type: {record_type}")
 
-        self.set_header(WARCRecord.WARC_TYPE, type)
+        self.set_header(WARCRecord.WARC_TYPE, record_type)
 
     def set_content(self, content: bytes | BinaryIO, content_type: str = None, block_digest = None, close: bool = False):
         """
