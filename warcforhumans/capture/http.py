@@ -15,6 +15,7 @@ except ImportError:
 
 _thread_local = threading.local()
 warc_writer: WARCWriter | None = None
+MIN_REVISIT_BYTES = 128
 
 _original_httpconnection_send = http.client.HTTPConnection.send
 
@@ -165,6 +166,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
             transfer_encoding = header.split(b":", 1)[1].strip().lower()
 
     payload_hash = hashlib.sha256()
+    payload_start = temp_file.tell()
 
     # TODO: What if the connection times out or is closed early?
     if content_length is not None:
@@ -217,7 +219,12 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
             block_hash.update(chunk)
             payload_hash.update(chunk)
 
-    revisit, headers = warc_writer.check_for_revisit(warc.hash_to_string(payload_hash))
+    payload_length = temp_file.tell() - payload_start
+    if payload_length >= MIN_REVISIT_BYTES:
+        revisit, headers = warc_writer.check_for_revisit(warc.hash_to_string(payload_hash))
+    else:
+        revisit = False
+        headers = {}
 
     if revisit:
         warc_record = WARCRecord("revisit", content_type = WARCRecord.CONTENT_HTTP_RESPONSE, url = _thread_local.request_url, sock = sock)
