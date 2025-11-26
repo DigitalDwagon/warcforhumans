@@ -112,7 +112,7 @@ class WARCRecord:
         :param content: The content of the record, as bytes or a seekable file object.
         :param content_type: The ``Content-Type`` to set for the record.
         :param block_digest: A hash of content (as a hash object), used as the ``WARC-Block-Digest``. If not set, one
-         will be generated with SHA-512.
+         will be generated with SHA-256.
         :param close: If content is a file object, whether it should be closed after the record is written.
         :return:
         """
@@ -132,7 +132,7 @@ class WARCRecord:
         self.set_header(WARCRecord.CONTENT_LENGTH, str(len(content)))
 
         if not block_digest:
-            block_digest = hashlib.sha512(content)
+            block_digest = hashlib.sha256(content)
         self.set_header(WARCRecord.WARC_BLOCK_DIGEST, hash_to_string(block_digest))
 
 
@@ -143,7 +143,7 @@ class WARCRecord:
         self._close_content_stream = close
 
         if not block_digest:
-            block_digest = hashlib.sha512()
+            block_digest = hashlib.sha256()
             stream.seek(0)
             while chunk := stream.read(2048):
                 block_digest.update(chunk)
@@ -448,9 +448,9 @@ def hash_to_string(h) -> str:
     :param h: The hash to convert
     :return: A string like "sha1:AIKLJM2V2EOKR4WOIWUWRQTEMUN57P4D"
     """
-    if h.name == "md5":
-        # Typical encoding of md5 is lowercase base16
-        # https://github.com/iipc/warc-specifications/issues/80#issuecomment-1637084423
+    # Typical encoding is base 16 per https://github.com/iipc/warc-specifications/issues/80#issuecomment-1637084423
+    base_16 = {"md5", "sha256", "sha512"}
+    if h.name in base_16:
         return f"{h.name}:{h.hexdigest()}"
 
     return f"{h.name}:{base64.b32encode(h.digest()).decode("utf-8")}"
