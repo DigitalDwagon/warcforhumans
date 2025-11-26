@@ -1,0 +1,19 @@
+when:
+  - event: push
+  - event: pull_request
+  - event: manual
+
+matrix:
+  PYTHON_VERSION:
+    - 3.12
+    - 3.13
+    - 3.14
+
+steps:
+  - name: test
+    image: python:${PYTHON_VERSION}
+    commands:
+      - pip install poetry pytest
+      - poetry config virtualenvs.create false
+      - poetry install
+      - pytest
