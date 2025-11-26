@@ -43,7 +43,7 @@ class WARCRecord:
 
     def __init__(self, record_type: str = None, content_type: str = None, url: str = None, sock: socket = None):
         """
-        Creates a new WARC record, with a random ID and the date set to the current timestamp.
+        Creates a new WARC record with a random ID.
         :param record_type: The type of WARC record. Equivalent to ``set_type``
         :param content_type: The ``Content-Type`` of the WARC record
         :param url: The URL of the WARC record
@@ -57,7 +57,6 @@ class WARCRecord:
         self._close_content_stream : bool = False
 
         self.get_id()
-        self.date_now()
 
         if record_type is not None:
             self.set_type(record_type)
@@ -150,12 +149,20 @@ class WARCRecord:
 
         self.set_header(WARCRecord.WARC_BLOCK_DIGEST, hash_to_string(block_digest))
 
-    def date_now(self):
+    def date(self, date: datetime = None):
         """
-        Sets the timestamp of the WARC to the current time.
+        Sets the timestamp of the WARC to the datetime provided, or the current time if no time is provided.
+        :param date: The datetime to set.
         :return:
         """
-        self.set_header(WARCRecord.WARC_DATE, datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        templ = "%Y-%m-%dT%H:%M:%SZ"
+        if date is not None:
+            if date.tzinfo is None or date.tzinfo != timezone.utc:
+                raise ValueError("Timezone for the WARC-Date must be in UTC.")
+
+            self.set_header(WARCRecord.WARC_DATE, date.strftime(templ))
+        else:
+            self.set_header(WARCRecord.WARC_DATE, datetime.now(timezone.utc).strftime(templ))
 
     def get_id(self) -> str:
         """
@@ -279,6 +286,7 @@ class WARCFile:
             body += f"{key}: {value}\r\n"
 
         warc_record.set_content(body.encode("utf-8"))
+        warc_record.date()
         self.write_record(warc_record, write_warcinfo_header=False)
         self._warcinfo_record = warc_record
 

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 import hashlib
 import http.client
 import io
@@ -219,6 +220,8 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
             block_hash.update(chunk)
             payload_hash.update(chunk)
 
+    date = datetime.now(timezone.utc)
+
     payload_length = temp_file.tell() - payload_start
     if payload_length >= MIN_REVISIT_BYTES:
         revisit, headers = warc_writer.check_for_revisit(warc.hash_to_string(payload_hash))
@@ -237,6 +240,8 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     warc_record.concurrent(_thread_local.request_warc_record)
     warc_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, warc.hash_to_string(payload_hash))
     warc_record.add_header(WARCRecord.WARC_PROTOCOL, http_version)
+    warc_record.date(date)
+    _thread_local.request_warc_record.date(date)
 
     # The response record is intentionally written before the request record to help with wayback indexing.
     warc_writer.pending_records.extend([warc_record, _thread_local.request_warc_record])
