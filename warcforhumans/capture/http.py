@@ -171,6 +171,9 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     payload_hash = hashlib.sha1()
     payload_start = temp_file.tell()
 
+    if transfer_encoding is not None and transfer_encoding != b"chunked":
+        raise NotImplementedError(f"Transfer-Encoding '{transfer_encoding.decode("utf-8")}' received from the server is not supported.")
+
     # TODO: What if the connection times out or is closed early?
     if content_length is not None:
         to_read = content_length
