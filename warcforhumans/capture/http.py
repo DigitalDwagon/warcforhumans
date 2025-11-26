@@ -39,6 +39,8 @@ def wrapped_send(self, data):
         data = encoded_data
 
     _thread_local.request_temp_file.write(data)
+    if not hasattr(_thread_local, "warc_date"):
+        _thread_local.warc_date = datetime.now(timezone.utc)
     return _original_httpconnection_send(self, data)
 
 http.client.HTTPConnection.send = wrapped_send
@@ -220,8 +222,6 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
             block_hash.update(chunk)
             payload_hash.update(chunk)
 
-    date = datetime.now(timezone.utc)
-
     payload_length = temp_file.tell() - payload_start
     if payload_length >= MIN_REVISIT_BYTES:
         revisit, headers = warc_writer.check_for_revisit(warc.hash_to_string(payload_hash))
@@ -240,8 +240,8 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     warc_record.concurrent(_thread_local.request_warc_record)
     warc_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, warc.hash_to_string(payload_hash))
     warc_record.add_header(WARCRecord.WARC_PROTOCOL, http_version)
-    warc_record.date(date)
-    _thread_local.request_warc_record.date(date)
+    warc_record.date(_thread_local.warc_date)
+    _thread_local.request_warc_record.date(_thread_local.warc_date)
 
     # The response record is intentionally written before the request record to help with wayback indexing.
     warc_writer.pending_records.extend([warc_record, _thread_local.request_warc_record])
@@ -263,3 +263,5 @@ def _cleanup_records():
         del _thread_local.request_url
     if hasattr(_thread_local, 'request_temp_file'):
         del _thread_local.request_temp_file
+    if hasattr(_thread_local, 'warc_date'):
+        del _thread_local.warc_date
