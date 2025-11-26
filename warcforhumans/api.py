@@ -131,7 +131,7 @@ class WARCRecord:
         self.set_header(WARCRecord.CONTENT_LENGTH, str(len(content)))
 
         if not block_digest:
-            block_digest = hashlib.sha256(content)
+            block_digest = hashlib.sha1(content)
         self.set_header(WARCRecord.WARC_BLOCK_DIGEST, hash_to_string(block_digest))
 
 
@@ -142,7 +142,7 @@ class WARCRecord:
         self._close_content_stream = close
 
         if not block_digest:
-            block_digest = hashlib.sha256()
+            block_digest = hashlib.sha1()
             stream.seek(0)
             while chunk := stream.read(2048):
                 block_digest.update(chunk)

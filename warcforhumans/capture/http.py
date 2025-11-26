@@ -136,7 +136,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
     fp = sock.makefile("rb", buffering=0)
     temp_file = tempfile.TemporaryFile() # NOTE: temp_file will be written to warc verbatim as the response content, don't manipulate it
 
-    block_hash = hashlib.sha256()
+    block_hash = hashlib.sha1()
 
     # Read up through the end of the header block.
     header_content = b"" # NOTE: header_content will be written to warc verbatim when writing revisit records, don't manipulate it
@@ -166,7 +166,7 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
         elif header.lower().startswith(b"transfer-encoding:"):
             transfer_encoding = header.split(b":", 1)[1].strip().lower()
 
-    payload_hash = hashlib.sha256()
+    payload_hash = hashlib.sha1()
     payload_start = temp_file.tell()
 
     # TODO: What if the connection times out or is closed early?
