@@ -1,4 +1,5 @@
 import os
+import queue
 
 import pytest
 import requests
@@ -10,11 +11,15 @@ import warcforhumans.capture.http as capture
 
 @pytest.fixture
 def fake_http_server():
-    def start_server(response_content, host='127.0.0.1', port=8080):
+    def start_server(response_content, host='127.0.0.1'):
+        port_queue = queue.Queue()
+
         def server():
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
-                server_socket.bind((host, port))
+                server_socket.bind((host, 0))
                 server_socket.listen(1)
+                _, assigned_port = server_socket.getsockname()
+                port_queue.put(assigned_port)
                 conn, _ = server_socket.accept()
                 with conn:
                     conn.recv(1024)  # Read the request (optional)
@@ -22,7 +27,7 @@ def fake_http_server():
 
         thread = threading.Thread(target=server, daemon=True)
         thread.start()
-        return f"http://{host}:{port}"
+        return f"http://{host}:{port_queue.get()}"
 
     return start_server
 
