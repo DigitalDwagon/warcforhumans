@@ -6,7 +6,9 @@ authors = []
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "zstandard"
+    "zstandard",
+    "beautifulsoup4 (>=4.14.3,<5.0.0)",
+    "h11 (>=0.16.0,<0.17.0)"
 ]
 
 
