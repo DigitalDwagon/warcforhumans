@@ -13,24 +13,19 @@ from requests.adapters import BaseAdapter
 from requests.cookies import extract_cookies_to_jar, MockResponse, MockRequest
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
+from urllib3 import HTTPResponse
 
-class WrappedResponse(h11.Response):
-    __slots__ = ("conn", "is_closed")
 
-    def __init__(self, response: h11.Response = None, *,
-                 headers: Union[Headers, List[Tuple[bytes, bytes]], List[Tuple[str, str]]] = None, status_code: int = None):
-        if response:
-            # Initialize from an existing h11.Response object
-            super().__init__(headers=response.headers, status_code=response.status_code)
-        else:
-            # Initialize with provided headers and status_code
-            super().__init__(headers=headers, status_code=status_code)
+class BodyStreamFromH11Response:
+    __slots__ = ("conn", "closed")
 
-        self.conn = None
-        self.is_closed = False
+    def __init__(self, conn):
+
+        self.conn = conn
+        self.closed = False
 
     def read(self, chunk_size):
-        if self.is_closed:
+        if self.closed:
             return
 
         event = self.conn.next_event(chunk_size)
@@ -39,15 +34,18 @@ class WrappedResponse(h11.Response):
             return event.data
 
         if isinstance(event, h11.EndOfMessage):
+            self.closed = True
             return b""
 
         pass
 
-    def set_connection(self, conn):
-        self.conn = conn
+    def close(self):
+        self.closed = True
+
 
 class H11Connection:
     def __init__(self, hostname, port, secure):
+        self.closed = False
         self.sock = socket.create_connection((hostname, port))
         if secure:
             self.sock = ssl.create_default_context().wrap_socket(self.sock, server_hostname=hostname)
@@ -86,7 +84,54 @@ class H11Adapter(BaseAdapter):
     def __init__(self):
         super().__init__()
 
-    def build_response(self, request: PreparedRequest, resp: h11.Response):
+    def _parse_timeout(self, timeout) -> tuple:
+        """
+        Parses a timeout into a consistent (connect timeout, read timeout) format.
+        :param timeout: How long to wait for the server to send
+            data before giving up, as a float, or a :ref:`(connect timeout,
+            read timeout) <timeouts>` tuple.
+        :return: (connect timeout, read timeout). One or both of these values may be None.
+        """
+        if isinstance(timeout, tuple):
+            return timeout
+
+        if timeout is not None:
+            return timeout, timeout
+
+        return None, None
+
+    def _parse_url(self, url: str) -> tuple[str, str, int, str]:
+        """
+        Parses a raw URL.
+        :param url: The URL to parse
+        :return: A tuple (scheme, hostname, port, target) from the URL.
+        """
+        parsed_url = urlsplit(url, allow_fragments=False)
+        hostname = parsed_url.hostname.split(":")[0]
+        if ":" in parsed_url.hostname:
+            port = int(parsed_url.hostname.split(":")[1])
+        else:
+            port = 80 if parsed_url.scheme == "http" else 443
+
+        target = parsed_url.path
+        if parsed_url.query:
+            target += "?" + parsed_url.query
+
+        return parsed_url.scheme, hostname, port, target
+
+    def build_response(self, request: PreparedRequest, resp: h11.Response, conn: H11Connection):
+        urllib3_formatted_headers = urllib3.HTTPHeaderDict()
+        for header, value in resp.headers:
+            urllib3_formatted_headers.add(header.decode("iso-8859-1"), value.decode("iso-8859-1"))
+
+        urllib3_response = HTTPResponse(
+            body = BodyStreamFromH11Response(conn),
+            headers=urllib3_formatted_headers,
+            preload_content=False,
+            decode_content=True
+        )
+
+
         response = Response()
         response.status_code = resp.status_code
         response.headers = CaseInsensitiveDict(
@@ -94,22 +139,18 @@ class H11Adapter(BaseAdapter):
         )
 
         response.encoding = get_encoding_from_headers(response.headers)
-        response.raw = resp
+        response.raw = urllib3_response
         response.reason = http.client.responses[response.status_code]
         response.url = request.url
-        urllib3_formatted_headers = urllib3.HTTPHeaderDict()
-        for header, value in resp.headers:
-            urllib3_formatted_headers.add(header.decode("iso-8859-1"), value.decode("iso-8859-1"))
-        response.cookies.extract_cookies(MockResponse(urllib3_formatted_headers), MockRequest(request))
+        extract_cookies_to_jar(response.cookies, urllib3_response, request)
+
         response.request = request
         response.connection = self
 
         return response
 
 
-    def send(
-        self, request: PreparedRequest, stream: bool = False, timeout: float | tuple = None, verify: bool | str = True, cert=None, proxies=None
-    ):
+    def send(self, request: PreparedRequest, stream: bool = False, timeout: float | tuple = None, verify: bool | str = True, cert=None, proxies=None):
         """Sends PreparedRequest object. Returns Response object.
 
         :param request: The :class:`PreparedRequest <PreparedRequest>` being sent.
@@ -125,16 +166,7 @@ class H11Adapter(BaseAdapter):
         :param proxies: (optional) The proxies dictionary to apply to the request.
         """
 
-        parsed_url = urlsplit(request.url)
-        hostname = parsed_url.hostname.split(":")[0]
-        if ":" in parsed_url.hostname:
-            port = int(parsed_url.hostname.split(":")[1])
-        else:
-            port = 80 if parsed_url.scheme == "http" else 443
-
-        target = parsed_url.path
-        if parsed_url.query:
-            target += "?" + parsed_url.query
+        scheme, hostname, port, target = self._parse_url(request.url)
 
 
         headers = list(request.headers.items())
@@ -144,17 +176,13 @@ class H11Adapter(BaseAdapter):
                         headers=headers,
                         target=target)
 
-        conn = H11Connection(hostname, port, parsed_url.scheme == "https")
+        conn = H11Connection(hostname, port, scheme == "https")
         conn.send_event(r)
         conn.send_event(h11.EndOfMessage())
 
         resp = conn.next_event(1048)
-        resp = WrappedResponse(resp)
-        resp.set_connection(conn)
 
-
-
-        return self.build_response(request, resp)
+        return self.build_response(request, resp, conn)
 
     def close(self):
         """Cleans up adapter specific items."""
