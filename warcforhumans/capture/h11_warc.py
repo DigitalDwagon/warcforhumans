@@ -15,6 +15,7 @@ from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
 from urllib3 import HTTPResponse
 
+CHUNK_SIZE = 2048
 
 class BodyStreamFromH11Response:
     __slots__ = ("conn", "closed")
@@ -44,16 +45,49 @@ class BodyStreamFromH11Response:
 
 
 class H11Connection:
-    def __init__(self, hostname, port, secure):
+    def __init__(self,
+                 hostname : str,
+                 port : int,
+                 secure : bool,
+                 connect_timeout : float | None = None,
+                 read_timeout : float | None = None,
+                 verify: bool | str | None = None,
+                 cert = None,
+                 proxies = None
+                 ):
         self.closed = False
-        self.sock = socket.create_connection((hostname, port))
+        self.sock = socket.create_connection((hostname, port), timeout=connect_timeout)
+        self.sock.settimeout(read_timeout)
         if secure:
-            self.sock = ssl.create_default_context().wrap_socket(self.sock, server_hostname=hostname)
+            if isinstance(verify, str):
+                # todo custom paths not working
+                ctx = ssl.create_default_context(capath=verify)
+            elif isinstance(verify, bool) and verify:
+                ctx = ssl.create_default_context()
+                ctx.verify_mode = ssl.CERT_REQUIRED
+            else:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+
+            if cert:
+                # todo not working
+                if isinstance(cert, tuple) and len(cert) == 2:
+                    ctx.load_cert_chain(certfile=cert[0], keyfile=cert[1])
+                elif isinstance(cert, str):
+                    ctx.load_cert_chain(certfile=cert)
+                else:
+                    raise ValueError(
+                        "Invalid certificate format. Provide a path to the certificate or a tuple (certfile, keyfile).")
+
+            self.sock = ctx.wrap_socket(self.sock, server_hostname=hostname)
 
         self.conn = h11.Connection(our_role=h11.CLIENT)
 
     def send_event(self, event: h11.Event):
-        self.sock.sendall(self.conn.send(event))
+        b = self.conn.send(event)
+        self.sock.sendall(b)
+        print(f"send: {b[:512]!r}")
 
     def next_event(self, chunk_size) -> h11.Event:
         while True:
@@ -61,7 +95,7 @@ class H11Connection:
             if event is h11.NEED_DATA:
                 bytes_received = self.sock.recv(chunk_size)
                 self.conn.receive_data(bytes_received)
-                print(f"{bytes_received!r}")
+                print(f"recv: {bytes_received[:512]!r}")
                 continue
 
             return event
@@ -150,7 +184,8 @@ class H11Adapter(BaseAdapter):
         return response
 
 
-    def send(self, request: PreparedRequest, stream: bool = False, timeout: float | tuple = None, verify: bool | str = True, cert=None, proxies=None):
+    def send(self, request: PreparedRequest, stream: bool = False, timeout: float | tuple = None,
+             verify: bool | str = True, cert=None, proxies=None):
         """Sends PreparedRequest object. Returns Response object.
 
         :param request: The :class:`PreparedRequest <PreparedRequest>` being sent.
@@ -172,15 +207,37 @@ class H11Adapter(BaseAdapter):
         headers = list(request.headers.items())
         headers.insert(0, ("Host", hostname))
 
+
+        chunked = not (request.body is None or "Content-Length" in request.headers)
+        if chunked:
+            headers.append(("Transfer-Encoding", "chunked"))
+
+        print(headers)
         r = h11.Request(method=request.method,
                         headers=headers,
                         target=target)
 
-        conn = H11Connection(hostname, port, scheme == "https")
+
+
+        connect_timeout, read_timeout = self._parse_timeout(timeout)
+        conn = H11Connection(hostname, port, scheme == "https", connect_timeout=connect_timeout,
+                             read_timeout=read_timeout, cert=cert, verify=verify, proxies=proxies)
+
+
+
         conn.send_event(r)
+        if request.body and not hasattr(request.body, "read"):
+            conn.send_event(h11.Data(request.body, chunked, chunked))
+        if request.body and hasattr(request.body, "read"):
+            while True:
+                chunk = request.body.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                conn.send_event(h11.Data(data=chunk))
+            pass
         conn.send_event(h11.EndOfMessage())
 
-        resp = conn.next_event(1048)
+        resp = conn.next_event(CHUNK_SIZE)
 
         return self.build_response(request, resp, conn)
 
