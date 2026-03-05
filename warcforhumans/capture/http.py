@@ -240,11 +240,12 @@ def httpresponse_init(self, sock, debuglevel=0, method=None, url=None):
         warc_record = WARCRecord("response", content_type = WARCRecord.CONTENT_HTTP_RESPONSE, url = _thread_local.request_url, sock = sock)
         warc_record.set_content(temp_file, close=True, block_digest=block_hash)
 
-    warc_record.concurrent(_thread_local.request_warc_record)
+
     warc_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, warc.hash_to_string(payload_hash))
     warc_record.add_header(WARCRecord.WARC_PROTOCOL, http_version)
     warc_record.date(_thread_local.warc_date)
     _thread_local.request_warc_record.date(_thread_local.warc_date)
+    warc_record.concurrent(_thread_local.request_warc_record)
 
     # The response record is intentionally written before the request record to help with wayback indexing.
     warc_writer.pending_records.extend([warc_record, _thread_local.request_warc_record])

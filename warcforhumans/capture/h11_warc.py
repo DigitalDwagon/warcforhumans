@@ -1,33 +1,39 @@
 import http.client
 import socket
 import ssl
-import urllib
-from typing import Union, List, Tuple
+import hashlib
+import time
+from io import BufferedRandom
+import tempfile
+from typing import override
 from urllib.parse import urlsplit
 
 import h11
 import urllib3
-from h11._headers import Headers
-from requests import PreparedRequest, Response, Request
+from _hashlib import HASH
+from requests import PreparedRequest, Response
 from requests.adapters import BaseAdapter
-from requests.cookies import extract_cookies_to_jar, MockResponse, MockRequest
+from requests.cookies import extract_cookies_to_jar
 from requests.structures import CaseInsensitiveDict
 from requests.utils import get_encoding_from_headers
-from urllib3 import HTTPResponse
+from urllib3 import HTTPResponse, request
+
+import warcforhumans.api
+from warcforhumans.api import WARCRecord, WARCWriter
 
 CHUNK_SIZE = 2048
 
 class BodyStreamFromH11Response:
-    __slots__ = ("conn", "closed")
+    __slots__ = ["conn", "closed"]
 
     def __init__(self, conn):
 
         self.conn = conn
         self.closed = False
 
-    def read(self, chunk_size):
+    def read(self, chunk_size: int = CHUNK_SIZE):
         if self.closed:
-            return
+            return b""
 
         event = self.conn.next_event(chunk_size)
 
@@ -43,6 +49,11 @@ class BodyStreamFromH11Response:
     def close(self):
         self.closed = True
 
+WARC_WRITER: WARCWriter = WARCWriter("h11example-$date-$number-$serial",
+                             #compressor=GZIPCompressor(),
+                             warcinfo_fields={"operator": "some person"},
+                             software="example-script/0.1"
+                             )
 
 class H11Connection:
     def __init__(self,
@@ -54,8 +65,15 @@ class H11Connection:
                  verify: bool | str | None = None,
                  cert = None,
                  proxies = None
-                 ):
-        self.closed = False
+                 ) -> None:
+        self.hostname: str = hostname
+        self.port: int = port
+        self.secure: bool = secure
+        self.read_timeout: float | None = read_timeout
+        self.verify: bool | str | None = verify
+
+        self.closed: bool = False
+
         self.sock = socket.create_connection((hostname, port), timeout=connect_timeout)
         self.sock.settimeout(read_timeout)
         if secure:
@@ -82,29 +100,185 @@ class H11Connection:
 
             self.sock = ctx.wrap_socket(self.sock, server_hostname=hostname)
 
-        self.conn = h11.Connection(our_role=h11.CLIENT)
+        self.conn: h11.Connection = h11.Connection(our_role=h11.CLIENT)
 
-    def send_event(self, event: h11.Event):
+    def send_event(self, event: h11.Event) -> None:
         b = self.conn.send(event)
         self.sock.sendall(b)
-        print(f"send: {b[:512]!r}")
 
-    def next_event(self, chunk_size) -> h11.Event:
+    def next_event(self, chunk_size: int) -> h11.Event | type[h11.PAUSED]:
         while True:
             event = self.conn.next_event()
-            if event is h11.NEED_DATA:
+            if isinstance(event, h11.NEED_DATA):
                 bytes_received = self.sock.recv(chunk_size)
                 self.conn.receive_data(bytes_received)
-                print(f"recv: {bytes_received[:512]!r}")
                 continue
+
+            if isinstance(event, h11.ConnectionClosed):
+                self.sock.close()
+                self.closed = True
 
             return event
 
-def _requests_headers_to_h11_headers(requests_headers: CaseInsensitiveDict[str]) -> list[tuple[str, str]]:
-    h11_headers : list[tuple[str, str]] = []
-    for key, value in requests_headers.items():
-        h11_headers.append((key, value))
-    return h11_headers
+    def close(self) -> None:
+        self.conn.send(h11.ConnectionClosed())
+        self.sock.close()
+
+    def start_next_cycle(self) -> None:
+        self.conn.start_next_cycle()
+
+class WARCWritingH11Connection(H11Connection):
+    def __init__(self,
+                 hostname: str,
+                 port: int,
+                 secure: bool,
+                 warc_writer: WARCWriter,
+                 connect_timeout: float | None = None,
+                 read_timeout: float | None = None,
+                 verify: bool | str | None = None,
+                 cert=None,
+                 proxies=None,
+
+                 ):
+        super().__init__(hostname, port, secure, connect_timeout, read_timeout, verify, cert, proxies)
+
+        self.request_record: WARCRecord | None = None
+        self.response_record: WARCRecord | None = None
+        self.response_payload_hash: HASH | None = None
+        self.response_file: BufferedRandom | None = None
+        self.warc_writer: WARCWriter = warc_writer
+
+
+    @override
+    def send_event(self, event: h11.Event) -> None:
+        if isinstance(event, h11.Request):
+            # todo check if there's another wip record
+            url = ""
+            if self.secure:
+                url += "https"
+            else:
+                url += "http"
+
+            url +=  "://" + self.hostname
+
+            if self.secure and self.port != 443:
+                url += ":" + str(self.port)
+            elif not self.secure and self.port != 80:
+                url += ":" + str(self.port)
+
+            url += event.target.decode("iso-8859-1")
+
+            request_record: WARCRecord = WARCRecord("request", url=url, content_type=WARCRecord.CONTENT_HTTP_REQUEST, sock=self.sock)
+            request_record.add_header(WARCRecord.WARC_PROTOCOL, WARCRecord.HTTP_1_1)
+            request_record.date()
+            self.request_record = request_record
+
+        if self.request_record is None:
+            raise RuntimeError("You tried to send an event, but no WARC request record was open. Your first event should be an h11.Request.")
+
+
+        b: bytes | None = self.conn.send(event)
+
+        if b is not None:
+            self.sock.sendall(b)
+            self.request_record.partial_content(b, finish=isinstance(event, h11.EndOfMessage))
+            print(f"send: {b[:512]!r}")
+
+    @override
+    def next_event(self, chunk_size: int) -> h11.Event | type[h11.PAUSED]:
+        if self.request_record is None:
+            raise RuntimeError("Started receiving a response, but there's no open request record.")
+
+        if not self.response_record:
+            # todo make sure there's a request record and no opened response record, etc
+            self.response_record = WARCRecord(record_type="response", content_type=WARCRecord.CONTENT_HTTP_RESPONSE, url=self.request_record.headers[WARCRecord.WARC_TARGET_URI][0], sock=self.sock)
+            self.response_record.set_header(WARCRecord.WARC_DATE, self.request_record.headers[WARCRecord.WARC_DATE][0])
+
+            self.response_file = tempfile.TemporaryFile()
+            self.response_payload_hash = hashlib.sha1()
+
+
+        while True:
+            event = self.conn.next_event()
+            if isinstance(event, h11.NEED_DATA):
+                bytes_received = self.sock.recv(chunk_size)
+                self.conn.receive_data(bytes_received)
+
+                if self.response_file is None:
+                    raise RuntimeError("No open response file (when writing response content)")
+
+                _ = self.response_file.write(bytes_received)
+                print(f"recv: {bytes_received[:512]!r}")
+                continue
+            break
+
+
+        if isinstance(event, h11.Data):
+            if self.response_payload_hash is not None:
+                self.response_payload_hash.update(event.data)
+
+        if isinstance(event, h11.ConnectionClosed):
+            self.sock.close()
+            self.closed = True
+
+        if isinstance(event, h11.Response):
+            self.response_record.add_header(WARCRecord.WARC_PROTOCOL, f"http/{event.http_version.decode()}")
+
+
+        if isinstance(event, h11.EndOfMessage):
+            if not self.response_file:
+                raise RuntimeError("Response file content is none when trying to finish a response message.")
+
+            if self.response_payload_hash is None:
+                raise RuntimeError("No payload hash when trying to finish response.")
+            self.response_record.set_header(WARCRecord.WARC_PAYLOAD_DIGEST, warcforhumans.api.hash_to_string(self.response_payload_hash))
+
+            revisit, headers = self.warc_writer.check_for_revisit(self.response_record.headers[WARCRecord.WARC_PAYLOAD_DIGEST][0])
+
+            if revisit:
+                self.response_record.add_headers(headers)
+                self.response_record.set_type("revisit")
+
+                # grab up to the first \r\n\r\n (header block)
+                header_content = b""
+                while True:
+                    line = self.response_file.readline(CHUNK_SIZE)
+                    header_content += line
+                    if not line or line == b"\r\n":
+                        break
+
+                self.response_record.set_content(header_content)
+                print("\n\nwriting records\n\n")
+            else:
+                self.response_record.set_content(self.response_file, close = True)
+
+            self.response_record.concurrent(self.request_record)
+            self.warc_writer.pending_records.append(self.response_record)
+            self.warc_writer.pending_records.append(self.request_record)
+            self.warc_writer.flush_pending()
+
+            self.request_record = None
+            self.response_record = None
+            self.response_payload_hash = None
+            self.response_file = None
+
+            print(f"returning {event}")
+            return event
+
+        print(f"returning {event}")
+        return event
+
+    @override
+    def close(self) -> None:
+        self.conn.send(h11.ConnectionClosed())
+
+        while not isinstance(self.next_event(CHUNK_SIZE), h11.PAUSED):
+            # if the connection needs to close before a response is fully read, this reads the whole thing in so WARC
+            # records can be written
+            pass
+
+        self.sock.close()
+
 
 
 class H11Adapter(BaseAdapter):
@@ -184,7 +358,9 @@ class H11Adapter(BaseAdapter):
         return response
 
 
-    def send(self, request: PreparedRequest, stream: bool = False, timeout: float | tuple = None,
+    @override
+    def send(self, request: PreparedRequest, stream: bool = False,
+             timeout: float | tuple[float, float] | tuple[float, None] | None = None,
              verify: bool | str = True, cert=None, proxies=None):
         """Sends PreparedRequest object. Returns Response object.
 
@@ -220,7 +396,7 @@ class H11Adapter(BaseAdapter):
 
 
         connect_timeout, read_timeout = self._parse_timeout(timeout)
-        conn = H11Connection(hostname, port, scheme == "https", connect_timeout=connect_timeout,
+        conn = WARCWritingH11Connection(hostname, port, scheme == "https", WARC_WRITER, connect_timeout=connect_timeout,
                              read_timeout=read_timeout, cert=cert, verify=verify, proxies=proxies)
 
 
@@ -237,6 +413,8 @@ class H11Adapter(BaseAdapter):
             pass
         conn.send_event(h11.EndOfMessage())
 
+
+        print("adapter getting events")
         resp = conn.next_event(CHUNK_SIZE)
 
         return self.build_response(request, resp, conn)
