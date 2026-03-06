@@ -1,19 +1,21 @@
 import queue
-from ssl import cert_time_to_seconds
 import typing
 from _thread import LockType
-from collections import deque
 from threading import Lock
+import weakref
 
-from warcforhumans.capture.h11_warc import H11Connection
+from urllib3 import Timeout
+
+from warcforhumans.capture.connection import H11Connection
 
 
 class PoolKey(typing.NamedTuple):
     scheme: str
     host: str
     port: int
-    verify: int | str | None
-    cert: any
+    verify: bool | str | None
+    cert: typing.Any
+    timeout: Timeout
 
 
 
@@ -50,14 +52,14 @@ class H11ConnectionPool:
 
 
         self.closed: bool = False
-        self.available_connections: queue.LifoQueue[H11Connection | None] = queue.LifoQueue(maxsize=maxsize)
+        self.available_connections: queue.LifoQueue[weakref.ref[H11Connection] | None] = queue.LifoQueue(maxsize=maxsize)
         self.busy_connections: list[H11Connection] = []
 
         self._lock: LockType = Lock()
 
-    def _create_connection(self) -> H11Connection:
+    def _create_connection(self, throwaway: bool = False) -> H11Connection:
         return H11Connection(self.hostname, self.port, self.secure, self.connect_timeout, self.read_timeout,
-                             self.verify, self.cert)
+                             self.verify, self.cert, throwaway)
 
 
     def get(self) -> H11Connection:
@@ -70,20 +72,25 @@ class H11ConnectionPool:
             else:
                 conn = self.available_connections.get_nowait()
 
+            if isinstance(conn, weakref.ref):
+                conn = conn()
+
             if not conn:
                 conn = self._create_connection()
 
             self.busy_connections.append(conn)
             return conn
         except queue.Empty:
-            # Creates a throwaway connection that won't be released.
-            return self._create_connection()
+            # Creates a throwaway connection that won't be released and will close itself after finishing
+            return self._create_connection(True)
 
     def release(self, conn: H11Connection) -> None:
         self.busy_connections.remove(conn)
         if not conn.closed:
             if not self.available_connections.full():
-                self.available_connections.put(conn)
+                conn_ref = weakref.ref(conn)
+                _ = weakref.finalize(conn_ref, conn.close)
+                self.available_connections.put(conn_ref)
         else:
             if self.available_connections.empty():
                 self.available_connections.put(None)
