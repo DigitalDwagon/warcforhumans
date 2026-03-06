@@ -1,3 +1,5 @@
+from math import inf
+import typing
 import socket
 import ssl
 from io import BufferedRandom
@@ -7,40 +9,41 @@ import hashlib
 
 import h11
 from _hashlib import HASH
+
 import warcforhumans.api as warc
 
 from warcforhumans.api import WARCWriter, WARCRecord
 
 CHUNK_SIZE = 2048
 
+class ConnectionInfo(typing.NamedTuple):
+    scheme: str
+    host: str
+    port: int
+    connect_timeout: float | None
+    read_timeout: float | None
+    verify: bool | str | None
+    cert: typing.Any
+    proxies: typing.Any
+
+
 class H11Connection:
     def __init__(self,
-                 hostname : str,
-                 port : int,
-                 secure : bool,
-                 connect_timeout : float | None = None,
-                 read_timeout : float | None = None,
-                 verify: bool | str | None = None,
-                 cert = None,
-                 proxies = None,
+                 info: ConnectionInfo,
                  throwaway: bool = False
                  ) -> None:
-        self.hostname: str = hostname
-        self.port: int = port
-        self.secure: bool = secure
-        self.read_timeout: float | None = read_timeout
-        self.verify: bool | str | None = verify
+        self.info: ConnectionInfo = info
         self.throwaway: bool = throwaway
 
         self.closed: bool = False
 
-        self.sock = socket.create_connection((hostname, port), timeout=connect_timeout)
-        self.sock.settimeout(read_timeout)
-        if secure:
-            if isinstance(verify, str):
+        self.sock = socket.create_connection((info.host, info.port), timeout=info.connect_timeout)
+        self.sock.settimeout(info.read_timeout)
+        if info.scheme == "https":
+            if isinstance(info.verify, str):
                 # todo custom paths not working
-                ctx = ssl.create_default_context(capath=verify)
-            elif isinstance(verify, bool) and verify:
+                ctx = ssl.create_default_context(capath=info.verify)
+            elif isinstance(info.verify, bool) and info.verify:
                 ctx = ssl.create_default_context()
                 ctx.verify_mode = ssl.CERT_REQUIRED
             else:
@@ -48,17 +51,17 @@ class H11Connection:
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
 
-            if cert:
+            if info.cert:
                 # todo not working
-                if isinstance(cert, tuple) and len(cert) == 2:
-                    ctx.load_cert_chain(certfile=cert[0], keyfile=cert[1])
-                elif isinstance(cert, str):
-                    ctx.load_cert_chain(certfile=cert)
+                if isinstance(info.cert, tuple) and len(info.cert) == 2:
+                    ctx.load_cert_chain(certfile=info.cert[0], keyfile=info.cert[1])
+                elif isinstance(info.cert, str):
+                    ctx.load_cert_chain(certfile=info.cert)
                 else:
                     raise ValueError(
                         "Invalid certificate format. Provide a path to the certificate or a tuple (certfile, keyfile).")
 
-            self.sock = ctx.wrap_socket(self.sock, server_hostname=hostname)
+            self.sock = ctx.wrap_socket(self.sock, server_hostname=info.host)
 
         self.conn: h11.Connection = h11.Connection(our_role=h11.CLIENT)
 
@@ -93,19 +96,11 @@ class H11Connection:
 
 class WARCWritingH11Connection(H11Connection):
     def __init__(self,
-                 hostname: str,
-                 port: int,
-                 secure: bool,
+                 info: ConnectionInfo,
                  warc_writer: WARCWriter,
-                 connect_timeout: float | None = None,
-                 read_timeout: float | None = None,
-                 verify: bool | str | None = None,
-                 cert=None,
-                 proxies=None,
                  throwaway: bool = False
-
                  ) -> None:
-        super().__init__(hostname, port, secure, connect_timeout, read_timeout, verify, cert, proxies, throwaway)
+        super().__init__(info, throwaway)
 
         self.request_record: WARCRecord | None = None
         self.response_record: WARCRecord | None = None
@@ -118,18 +113,15 @@ class WARCWritingH11Connection(H11Connection):
     def send_event(self, event: h11.Event) -> None:
         if isinstance(event, h11.Request):
             # todo check if there's another wip record
-            url = ""
-            if self.secure:
-                url += "https"
-            else:
-                url += "http"
+            if self.info.scheme != "http" and self.info.scheme != "https":
+                raise ValueError("Scheme for connection is not http or https.")
 
-            url +=  "://" + self.hostname
+            url: str = self.info.scheme + "://" + self.info.host
 
-            if self.secure and self.port != 443:
-                url += ":" + str(self.port)
-            elif not self.secure and self.port != 80:
-                url += ":" + str(self.port)
+            if self.info.scheme == "https" and self.info.port != 443:
+                url += ":" + str(self.info.port)
+            elif self.info.scheme == "http" and self.info.port != 80:
+                url += ":" + str(self.info.port)
 
             url += event.target.decode("iso-8859-1")
 

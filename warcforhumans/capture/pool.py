@@ -6,17 +6,7 @@ import weakref
 
 from urllib3 import Timeout
 
-from warcforhumans.capture.connection import H11Connection
-
-
-class PoolKey(typing.NamedTuple):
-    scheme: str
-    host: str
-    port: int
-    verify: bool | str | None
-    cert: typing.Any
-    timeout: Timeout
-
+from warcforhumans.capture.connection import H11Connection, ConnectionInfo
 
 
 class H11ConnectionPool:
@@ -26,29 +16,16 @@ class H11ConnectionPool:
     """
 
     def __init__(self,
-                 hostname: str,
-                 port: int,
-                 secure: bool,
+                 info: ConnectionInfo,
                  maxsize: int = 1,
-                 connect_timeout: float | None = None,
-                 read_timeout: float | None = None,
-                 block: bool = False,
-                 verify: bool | str | None = None,
-                 cert=None,
-                 proxies=None) -> None:
+                 block: bool = False) -> None:
 
-        if proxies:
+        if info.proxies is not None:
             raise NotImplementedError("Proxies are not yet supported by H11ConnectionPool")
 
-        self.hostname: str = hostname
-        self.port: int = port
+        self.info: ConnectionInfo = info
         self.maxsize: int = maxsize
-        self.connect_timeout : float | None = connect_timeout
-        self.read_timeout: float | None = read_timeout
         self.block: bool = block
-        self.secure: bool = secure
-        self.verify: bool | str | None = verify
-        self.cert = None
 
 
         self.closed: bool = False
@@ -58,8 +35,7 @@ class H11ConnectionPool:
         self._lock: LockType = Lock()
 
     def _create_connection(self, throwaway: bool = False) -> H11Connection:
-        return H11Connection(self.hostname, self.port, self.secure, self.connect_timeout, self.read_timeout,
-                             self.verify, self.cert, throwaway)
+        return H11Connection(self.info, throwaway)
 
 
     def get(self) -> H11Connection:

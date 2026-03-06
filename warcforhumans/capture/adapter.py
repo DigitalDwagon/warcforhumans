@@ -12,7 +12,7 @@ from requests.utils import get_encoding_from_headers
 from urllib3 import HTTPResponse
 
 from warcforhumans.api import WARCWriter
-from warcforhumans.capture.connection import H11Connection, WARCWritingH11Connection
+from warcforhumans.capture.connection import ConnectionInfo, H11Connection, WARCWritingH11Connection
 
 CHUNK_SIZE = 2048
 
@@ -165,9 +165,8 @@ class H11Adapter(BaseAdapter):
 
 
         connect_timeout, read_timeout = self._parse_timeout(timeout)
-        conn = WARCWritingH11Connection(hostname, port, scheme == "https", WARC_WRITER, connect_timeout=connect_timeout,
-                             read_timeout=read_timeout, cert=cert, verify=verify, proxies=proxies)
-
+        info = ConnectionInfo(scheme, hostname, port, connect_timeout, read_timeout, verify, cert, proxies)
+        conn = WARCWritingH11Connection(info, WARC_WRITER)
 
 
         conn.send_event(r)
@@ -182,8 +181,6 @@ class H11Adapter(BaseAdapter):
             pass
         conn.send_event(h11.EndOfMessage())
 
-
-        print("adapter getting events")
         resp = conn.next_event(CHUNK_SIZE)
 
         return self.build_response(request, resp, conn)
