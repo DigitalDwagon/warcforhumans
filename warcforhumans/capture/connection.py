@@ -13,6 +13,7 @@ from _hashlib import HASH
 import warcforhumans.api as warc
 
 from warcforhumans.api import WARCWriter, WARCRecord
+from warcforhumans.capture import util
 
 CHUNK_SIZE = 2048
 
@@ -20,11 +21,12 @@ class ConnectionInfo(typing.NamedTuple):
     scheme: str
     host: str
     port: int
-    connect_timeout: float | None
-    read_timeout: float | None
-    verify: bool | str | None
-    cert: typing.Any
-    proxies: typing.Any
+    connect_timeout: float | None = None
+    read_timeout: float | None = None
+    verify: bool | str | None = None
+    cert: typing.Any | None = None
+    proxies: typing.Any | None = None
+    socket_options: util._TYPE_SOCKET_OPTIONS = []
 
 
 class H11Connection:
@@ -37,8 +39,13 @@ class H11Connection:
 
         self.closed: bool = False
 
-        self.sock = socket.create_connection((info.host, info.port), timeout=info.connect_timeout)
+        #todo socket creation should be extracted to a method
+        self.sock: socket.socket = socket.create_connection((info.host, info.port), timeout=info.connect_timeout)
         self.sock.settimeout(info.read_timeout)
+
+        for level, optname, value in info.socket_options:
+            self.sock.setsockopt(level, optname, value)
+
         if info.scheme == "https":
             if isinstance(info.verify, str):
                 # todo custom paths not working
@@ -219,8 +226,7 @@ class WARCWritingH11Connection(H11Connection):
             self.response_payload_hash = None
             self.response_file = None
 
-            print(f"returning {event}")
-            return event
+            self.start_next_cycle()
 
         print(f"returning {event}")
         return event

@@ -1,5 +1,5 @@
 import http.client
-from typing import override
+from typing import override, IO
 from urllib.parse import urlsplit
 
 import h11
@@ -16,14 +16,14 @@ from warcforhumans.capture.connection import ConnectionInfo, H11Connection, WARC
 
 CHUNK_SIZE = 2048
 
-class BodyStreamFromH11Response:
-    __slots__ = ["conn", "closed"]
-
+class BodyStreamFromH11Response(IO[bytes]):
+    # todo: implement all IO[bytes] methods
     def __init__(self, conn: H11Connection):
 
         self.conn: H11Connection = conn
-        self.closed: bool = False
+        self._closed = False
 
+    @override
     def read(self, chunk_size: int = CHUNK_SIZE):
         if self.closed:
             return b""
@@ -37,10 +37,21 @@ class BodyStreamFromH11Response:
             self.closed = True
             return b""
 
-        pass
+        raise RuntimeError("Wrong event type!") # todo: better error type
 
+    @override
     def close(self):
         self.closed = True
+
+    @property
+    @override
+    def closed(self) -> bool:
+        return self._closed
+
+    @closed.setter
+    def closed(self, value: bool):
+        self._closed = value
+
 
 WARC_WRITER: WARCWriter = WARCWriter("h11example-$date-$number-$serial",
                              #compressor=GZIPCompressor(),

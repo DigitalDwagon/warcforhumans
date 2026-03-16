@@ -4,8 +4,6 @@ from _thread import LockType
 from threading import Lock
 import weakref
 
-from urllib3 import Timeout
-
 from warcforhumans.capture.connection import H11Connection, ConnectionInfo
 
 
@@ -39,6 +37,9 @@ class H11ConnectionPool:
 
 
     def get(self) -> H11Connection:
+        if self.closed:
+            raise RuntimeError("Pool is closed, cannot get a connection.")
+
         if len(self.busy_connections) < self.maxsize and self.available_connections.empty():
             self.available_connections.put(None)
 
@@ -62,6 +63,10 @@ class H11ConnectionPool:
 
     def release(self, conn: H11Connection) -> None:
         self.busy_connections.remove(conn)
+        if self.closed:
+            conn.close()
+            return
+
         if not conn.closed:
             if not self.available_connections.full():
                 conn_ref = weakref.ref(conn)
@@ -70,3 +75,37 @@ class H11ConnectionPool:
         else:
             if self.available_connections.empty():
                 self.available_connections.put(None)
+
+    def close(self) -> None:
+        # TODO this should close all available connections in the pool.
+        self.closed = True
+
+
+class PoolManager:
+    def __init__(self, num_pools: int = 10, **pool_kw: dict[str, typing.Any] | None) -> None:
+        self.num_pools: int = num_pools
+        self.pools: dict[ConnectionInfo, H11ConnectionPool] = {}
+        self.pool_kw : dict[str, typing.Any] = dict(pool_kw)
+
+    def close(self) -> None:
+        for info, pool in self.pools.items():
+            pool.close()
+
+    def connection_from_info(self, info: ConnectionInfo) -> H11Connection:
+        return self.pool_from_info(info).get()
+
+    def connection_from_host(self, scheme: str, host: str, port: int) -> H11Connection:
+        info = ConnectionInfo(scheme, host, port)
+        return self.connection_from_info(info)
+
+    def pool_from_info(self, info: ConnectionInfo, **pool_kw: typing.Any)-> H11ConnectionPool:
+        pool = self.pools.get(info)
+        if pool is not None:
+            return pool
+
+        if not pool_kw:
+            pool_kw = self.pool_kw
+
+        pool = H11ConnectionPool(info, **pool_kw)
+        self.pools[info] = pool
+        return pool
