@@ -1,7 +1,10 @@
-from math import inf
+from collections import defaultdict
+from collections.abc import Generator
+import datetime
 import typing
 import socket
 import ssl
+import warnings
 from io import BufferedRandom
 import tempfile
 from typing import override
@@ -9,6 +12,9 @@ import hashlib
 
 import h11
 from _hashlib import HASH
+from urllib3.connection import RECENT_DATE, _ssl_wrap_socket_and_match_hostname
+from urllib3.exceptions import SystemTimeWarning
+from urllib3.util import create_urllib3_context, resolve_cert_reqs, resolve_ssl_version
 
 import warcforhumans.api as warc
 
@@ -28,49 +34,69 @@ class ConnectionInfo(typing.NamedTuple):
     proxies: typing.Any | None = None
     socket_options: util._TYPE_SOCKET_OPTIONS = []
 
+class SecureConnectionOptions(typing.NamedTuple):
+    cert_reqs: int | str | None = None
+    assert_hostname: None | str | typing.Literal[False] = None
+    assert_fingerprint: str | None = None
+    server_hostname: str | None = None
+    ssl_context: ssl.SSLContext | None = None
+    ca_certs: str | None = None
+    ca_cert_dir: str | None = None
+    ca_cert_data: None | str | bytes = None
+    ssl_minimum_version: int | None = None
+    ssl_maximum_version: int | None = None
+    ssl_version: int | str | None = None  # Deprecated in urllib3
+    cert_file: str | None = None
+    key_file: str | None = None
+    key_password: str | None = None
 
 class H11Connection:
     def __init__(self,
                  info: ConnectionInfo,
+                 *,
+                 secure_options: SecureConnectionOptions | None = None,
                  throwaway: bool = False
                  ) -> None:
         self.info: ConnectionInfo = info
         self.throwaway: bool = throwaway
 
         self.closed: bool = False
-
-        #todo socket creation should be extracted to a method
-        self.sock: socket.socket = socket.create_connection((info.host, info.port), timeout=info.connect_timeout)
-        self.sock.settimeout(info.read_timeout)
-
-        for level, optname, value in info.socket_options:
-            self.sock.setsockopt(level, optname, value)
-
-        if info.scheme == "https":
-            if isinstance(info.verify, str):
-                # todo custom paths not working
-                ctx = ssl.create_default_context(capath=info.verify)
-            elif isinstance(info.verify, bool) and info.verify:
-                ctx = ssl.create_default_context()
-                ctx.verify_mode = ssl.CERT_REQUIRED
-            else:
-                ctx = ssl.create_default_context()
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-
-            if info.cert:
-                # todo not working
-                if isinstance(info.cert, tuple) and len(info.cert) == 2:
-                    ctx.load_cert_chain(certfile=info.cert[0], keyfile=info.cert[1])
-                elif isinstance(info.cert, str):
-                    ctx.load_cert_chain(certfile=info.cert)
-                else:
-                    raise ValueError(
-                        "Invalid certificate format. Provide a path to the certificate or a tuple (certfile, keyfile).")
-
-            self.sock = ctx.wrap_socket(self.sock, server_hostname=info.host)
-
+        self.sock: socket.socket = self._create_socket(secure_options)
         self.conn: h11.Connection = h11.Connection(our_role=h11.CLIENT)
+
+    def _create_socket(self, secure_options: SecureConnectionOptions | None) -> socket.socket:
+        sock: socket.socket = socket.create_connection((self.info.host, self.info.port), timeout=self.info.connect_timeout)
+        sock.settimeout(self.info.read_timeout)
+
+        for level, optname, value in self.info.socket_options:
+            sock.setsockopt(level, optname, value)
+
+        if self.info.scheme == "https":
+            if not secure_options:
+                secure_options = SecureConnectionOptions()
+
+            # TODO - it would be nice to not rely on urllib3 here
+            wrapped = _ssl_wrap_socket_and_match_hostname(
+                sock,
+                cert_reqs=secure_options.cert_reqs,
+                ssl_version=secure_options.ssl_version,
+                ssl_minimum_version=secure_options.ssl_minimum_version,
+                ssl_maximum_version=secure_options.ssl_maximum_version,
+                cert_file=secure_options.cert_file,
+                key_file=secure_options.key_file,
+                key_password=secure_options.key_password,
+                ca_certs=secure_options.ca_certs,
+                ca_cert_dir=secure_options.ca_cert_dir,
+                ca_cert_data=secure_options.ca_cert_data,
+                assert_hostname=secure_options.assert_hostname,
+                assert_fingerprint=secure_options.assert_fingerprint,
+                server_hostname=secure_options.server_hostname or self.info.host,
+                ssl_context=secure_options.ssl_context,
+            )
+
+            sock = wrapped.socket
+
+        return sock
 
     def send_event(self, event: h11.Event) -> None:
         b = self.conn.send(event)
@@ -98,7 +124,29 @@ class H11Connection:
         self.sock.close()
 
     def start_next_cycle(self) -> None:
+        our_state = self.conn.our_state
+        their_state = self.conn.their_state
+
+        if our_state != h11.IDLE and our_state != h11.DONE:
+            raise h11.LocalProtocolError(f"connection not in a state where the next cycle can be started: {self.conn.states}")
+
+        if our_state == h11.IDLE and their_state == h11.IDLE:
+            # next cycle already started
+            return
+
+        if our_state == h11.DONE and not their_state == h11.DONE:
+            _ = self.events_until_end(CHUNK_SIZE)
+
+        # states should be [DONE, DONE] if it made it this far
+        # todo: verify that this functions correctly
         self.conn.start_next_cycle()
+
+    def events_until_end(self, chunk_size: int) -> Generator[h11.Event | type[h11.PAUSED]]:
+        while True:
+            event = self.next_event(chunk_size)
+            yield event
+            if isinstance(event, h11.EndOfMessage):
+                return
 
 
 class WARCWritingH11Connection(H11Connection):
@@ -107,7 +155,7 @@ class WARCWritingH11Connection(H11Connection):
                  warc_writer: WARCWriter,
                  throwaway: bool = False
                  ) -> None:
-        super().__init__(info, throwaway)
+        super().__init__(info, throwaway=throwaway)
 
         self.request_record: WARCRecord | None = None
         self.response_record: WARCRecord | None = None

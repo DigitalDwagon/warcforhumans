@@ -2,7 +2,9 @@ import http.client
 from email.message import Message
 from http.client import ResponseNotReady
 from importlib.metadata import version
-from typing_extensions import TYPE_CHECKING
+import os
+import ssl
+from typing_extensions import TYPE_CHECKING, override
 
 import h11
 from urllib3 import HTTPResponse
@@ -16,8 +18,10 @@ from urllib3._base_connection import ProxyConfig, _TYPE_BODY, _ResponseOptions
 
 if TYPE_CHECKING:
     from urllib3._base_connection import BaseHTTPConnection as _BaseHTTPConnection
+    from urllib3._base_connection import BaseHTTPSConnection as _BaseHTTPSConnection
 else:
     _BaseHTTPConnection = object
+    _BaseHTTPSConnection = object
 
 from urllib3.util import Url
 from urllib3.util.connection import _TYPE_SOCKET_OPTIONS
@@ -25,14 +29,14 @@ from urllib3.util.timeout import _TYPE_TIMEOUT, _DEFAULT_TIMEOUT, Timeout
 
 import warcforhumans.capture.util as util
 from warcforhumans.capture.adapter import BodyStreamFromH11Response
-from warcforhumans.capture.connection import ConnectionInfo, H11Connection
+from warcforhumans.capture.connection import ConnectionInfo, H11Connection, SecureConnectionOptions
 
 
 DEFAULT_USER_AGENT: str = f"warcforhumans/{version("warcforhumans")} (like urllib3/{version("urllib3")}"
 
 
 class HTTPConnection(_BaseHTTPConnection):
-    scheme: str = "http"
+    scheme: typing.ClassVar[str] = "http"
     default_port: typing.ClassVar[int] = 80
 
     default_socket_options: typing.ClassVar[_TYPE_SOCKET_OPTIONS] = [
@@ -76,15 +80,28 @@ class HTTPConnection(_BaseHTTPConnection):
         self.socket_options: _TYPE_SOCKET_OPTIONS | None = socket_options
         self.sock: socket.socket | None = None
         self.conn: H11Connection | None = None
+        self.secure_connection_options: SecureConnectionOptions | None = None
 
         # The following attributes are required to exist by base classes:
 
-    @typing.override
-    def connect(self) -> None:
+    def _new_conn(self) -> H11Connection:
         if self.socket_options is None:
             self.socket_options = []
 
-        self.conn = self.ConnectionCls(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options))
+        return self.ConnectionCls(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), secure_options=self.secure_connection_options)
+
+    @typing.override
+    def connect(self) -> None:
+        if self.conn is None:
+            self.conn = self._new_conn()
+            return
+
+        if self.conn.closed:
+            self.conn = self._new_conn()
+            return
+
+        self.conn.start_next_cycle()
+
 
     @typing.override
     def set_tunnel(
@@ -144,7 +161,7 @@ class HTTPConnection(_BaseHTTPConnection):
 
         print(f"method: {method}\nurl: {url}\nheaders:{headers}")
 
-        if self.conn is None:
+        if self.conn is None or self.conn.conn.states[h11.CLIENT] is not h11.IDLE:
             self.connect()
             if self.conn is None:
                 raise RuntimeError("Could not create a new connection") # todo better error type
@@ -189,6 +206,10 @@ class HTTPConnection(_BaseHTTPConnection):
             print(f"conn: {self.conn}\nsock: {self.sock}")
             raise ResponseNotReady()
 
+        if self.conn.conn.our_state is not h11.DONE:
+            print("request not finished")
+            raise ResponseNotReady()
+
         if self._response_options is None:
             print("response options is none")
             raise ResponseNotReady()
@@ -228,3 +249,116 @@ class HTTPConnection(_BaseHTTPConnection):
         )
         return response
 
+class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[reportUnsafeMultipleInheritance]
+    scheme: typing.ClassVar[str] = "https"
+    default_port: typing.ClassVar[int] = 443
+
+    def __init__(  # pyright: ignore[reportMissingSuperCall]
+            self,
+            host: str,
+            port: int | None = None,
+            *,
+            timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
+            source_address: tuple[str, int] | None = None,
+            blocksize: int = 16384,
+            socket_options: _TYPE_SOCKET_OPTIONS | None = None,
+            proxy: Url | None = None,
+            proxy_config: ProxyConfig | None = None,
+            cert_reqs: int | str | None = None,
+            assert_hostname: None | str | typing.Literal[False] = None,
+            assert_fingerprint: str | None = None,
+            server_hostname: str | None = None,
+            ssl_context: ssl.SSLContext | None = None,
+            ca_certs: str | None = None,
+            ca_cert_dir: str | None = None,
+            ca_cert_data: None | str | bytes = None,
+            ssl_minimum_version: int | None = None,
+            ssl_maximum_version: int | None = None,
+            ssl_version: int | str | None = None,  # Deprecated
+            cert_file: str | None = None,
+            key_file: str | None = None,
+            key_password: str | None = None,
+    ) -> None:
+        super().__init__(
+            host,
+            port=port,
+            timeout=timeout,
+            source_address=source_address,
+            blocksize=blocksize,
+            socket_options=socket_options,
+            proxy=proxy,
+            proxy_config=proxy_config
+        )
+        self.cert_reqs: int | str | None = cert_reqs
+        self.assert_hostname: None | str | typing.Literal[False] = assert_hostname
+        self.assert_fingerprint: str | None = assert_fingerprint
+        self.server_hostname: str | None = server_hostname
+        self.ssl_context: ssl.SSLContext | None = ssl_context
+        self.ca_certs: str | None = ca_certs and os.path.expanduser(ca_certs)
+        self.ca_cert_dir: str | None = ca_cert_dir and os.path.expanduser(ca_cert_dir)
+        self.ca_cert_data: None | str | bytes = ca_cert_data
+        self.ssl_minimum_version: int | None = ssl_minimum_version
+        self.ssl_maximum_version: int | None = ssl_maximum_version
+        self.ssl_version: int | str | None = ssl_version # Deprecated
+        self.cert_file: str | None = cert_file
+        self.key_file: str | None = key_file
+        self.key_password: str | None = key_password
+        self.secure_connection_options: SecureConnectionOptions | None = SecureConnectionOptions(
+            cert_reqs=cert_reqs,
+            assert_hostname=assert_hostname,
+            assert_fingerprint=assert_fingerprint,
+            server_hostname=server_hostname,
+            ssl_context=ssl_context,
+            ca_certs=ca_certs,
+            ca_cert_dir=ca_cert_dir,
+            ca_cert_data=ca_cert_data,
+            ssl_minimum_version=ssl_minimum_version,
+            ssl_maximum_version=ssl_maximum_version,
+            ssl_version=ssl_version,
+            cert_file=cert_file,
+            key_file=key_file,
+            key_password=key_password
+        )
+
+        if cert_reqs is None:
+            if self.ssl_context is not None:
+                self.cert_reqs = self.ssl_context.verify_mode
+            else:
+                self.cert_reqs = ssl.CERT_REQUIRED
+
+
+    def set_cert(
+        self,
+        key_file: str | None = None,
+        cert_file: str | None = None,
+        cert_reqs: int | str | None = None,
+        key_password: str | None = None,
+        ca_certs: str | None = None,
+        assert_hostname: None | str | typing.Literal[False] = None,
+        assert_fingerprint: str | None = None,
+        ca_cert_dir: str | None = None,
+        ca_cert_data: None | str | bytes = None,
+    ) -> None:
+        """
+        DEPRECATED
+        This method should only be called once, before the connection is used.
+        """
+
+
+        # If cert_reqs is not provided we'll assume CERT_REQUIRED unless we also
+        # have an SSLContext object in which case we'll use its verify_mode.
+        if cert_reqs is None:
+            if self.ssl_context is not None:
+                cert_reqs = self.ssl_context.verify_mode
+            else:
+                cert_reqs = ssl.CERT_REQUIRED
+
+        self.key_file = key_file
+        self.cert_file = cert_file
+        self.cert_reqs = cert_reqs
+        self.key_password = key_password
+        self.assert_hostname = assert_hostname
+        self.assert_fingerprint = assert_fingerprint
+        self.ca_certs = ca_certs and os.path.expanduser(ca_certs)
+        self.ca_cert_dir = ca_cert_dir and os.path.expanduser(ca_cert_dir)
+        self.ca_cert_data = ca_cert_data
