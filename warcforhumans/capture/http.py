@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
 import hashlib
 import http.client
 import io
 import tempfile
 import threading
+from datetime import datetime, timezone
 
 import warcforhumans.api as warc
 from warcforhumans.api import WARCRecord, WARCWriter

@@ -1,8 +1,8 @@
 import queue
 import typing
+import weakref
 from _thread import LockType
 from threading import Lock
-import weakref
 
 from warcforhumans.capture.connection import H11Connection, ConnectionInfo
 

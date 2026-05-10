@@ -13,7 +13,6 @@ def normalize_netloc(orig: str, scheme: str | None = None, port: int | None = No
         orig = "//" + orig
 
     parts = urllib.parse.urlsplit(orig)
-    print(parts)
     if parts.netloc:
         return parts.netloc
     else:

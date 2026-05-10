@@ -105,8 +105,6 @@ class HTTPConnection(_BaseHTTPConnection):
         if proxy is not None or proxy_config is not None:
             raise NotImplementedError("warcforhumans HTTPConnection does not support proxies. Sorry!")
 
-        print("init")
-
         if port is not None:
             self.port: int = port
         else:
@@ -131,13 +129,10 @@ class HTTPConnection(_BaseHTTPConnection):
         #return self.ConnectionCls(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), secure_options=self.secure_connection_options)
         conn = WARCWritingH11Connection(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), self.warc_writer, secure_options=self.secure_connection_options)
         self.is_verified = conn.is_verified
-        print(f"conn reports as verified: {conn.is_verified}")
         return conn
 
     @typing.override
     def connect(self) -> None:
-        print("asked to connect")
-
         if self.conn is None:
             self.conn = self._new_conn()
             return
@@ -206,8 +201,6 @@ class HTTPConnection(_BaseHTTPConnection):
             enforce_content_length=enforce_content_length,
         )
 
-        print(f"method: {method}\nurl: {url}\nheaders:{headers}")
-
         if self.conn is None or self.conn.conn.states[h11.CLIENT] is not h11.IDLE:
             self.connect()
             if self.conn is None:
@@ -249,16 +242,12 @@ class HTTPConnection(_BaseHTTPConnection):
     @typing.override
     def getresponse(self) -> HTTPResponse:
         if self.conn is None:
-            print("Connection or sock is none")
-            print(f"conn: {self.conn}\nsock: {self.sock}")
             raise ResponseNotReady()
 
         if self.conn.conn.our_state is not h11.DONE:
-            print("request not finished")
             raise ResponseNotReady()
 
         if self._response_options is None:
-            print("response options is none")
             raise ResponseNotReady()
 
         resp_options = self._response_options
@@ -269,7 +258,6 @@ class HTTPConnection(_BaseHTTPConnection):
         r = self.conn.next_event(self.blocksize)
         if not isinstance(r, h11.Response):
             raise ResponseError()
-        print(r)
 
         urllib3_formatted_headers = urllib3.HTTPHeaderDict()
         for header, value in r.headers:
@@ -357,6 +345,7 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
             if self.ssl_context is not None:
                 self.cert_reqs = self.ssl_context.verify_mode
             else:
+                self.cert_reqs = ssl.CERT_REQUIRED
                 self.cert_reqs = ssl.CERT_REQUIRED
 
         self.secure_connection_options: SecureConnectionOptions | None = SecureConnectionOptions(

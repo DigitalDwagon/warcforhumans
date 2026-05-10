@@ -1,23 +1,17 @@
-from collections import defaultdict
-from collections.abc import Generator
-import datetime
-import typing
+import hashlib
 import socket
 import ssl
-import warnings
-from io import BufferedRandom
 import tempfile
+import typing
+from collections.abc import Generator
+from io import BufferedRandom
 from typing import override
-import hashlib
 
 import h11
 from _hashlib import HASH
-from urllib3.connection import RECENT_DATE, _ssl_wrap_socket_and_match_hostname
-from urllib3.exceptions import SystemTimeWarning
-from urllib3.util import create_urllib3_context, resolve_cert_reqs, resolve_ssl_version
+from urllib3.connection import _ssl_wrap_socket_and_match_hostname
 
 import warcforhumans.api as warc
-
 from warcforhumans.api import WARCWriter, WARCRecord
 from warcforhumans.capture import util
 
@@ -197,7 +191,6 @@ class WARCWritingH11Connection(H11Connection):
         if b is not None:
             self.sock.sendall(b)
             self.request_record.partial_content(b, finish=isinstance(event, h11.EndOfMessage))
-            print(f"send: {b[:512]!r}")
 
     @override
     def next_event(self, chunk_size: int) -> h11.Event | type[h11.PAUSED]:
@@ -223,7 +216,6 @@ class WARCWritingH11Connection(H11Connection):
                     raise RuntimeError("No open response file (when writing response content)")
 
                 _ = self.response_file.write(bytes_received)
-                print(f"recv: {bytes_received[:512]!r}")
                 continue
             break
 
@@ -263,7 +255,6 @@ class WARCWritingH11Connection(H11Connection):
                         break
 
                 self.response_record.set_content(header_content)
-                print("\n\nwriting records\n\n")
             else:
                 self.response_record.set_content(self.response_file, close = True)
 
@@ -279,7 +270,6 @@ class WARCWritingH11Connection(H11Connection):
 
             self.start_next_cycle()
 
-        print(f"returning {event}")
         return event
 
     @override
