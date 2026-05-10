@@ -48,7 +48,7 @@ class H11HTTPPoolManager(urllib3.PoolManager):
         return pool
 
 
-class H11HTTPAdapter(HTTPAdapter):
+class WARCHTTPAdapter(HTTPAdapter):
     def __init__(self, warc_writer=None, *args, **kwargs):
         self.warc_writer = warc_writer
         super().__init__(*args, **kwargs)

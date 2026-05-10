@@ -15,6 +15,7 @@ from socket import socket
 from ssl import SSLSocket
 from typing import Iterator, BinaryIO
 
+import requests
 from _hashlib import HASH
 
 from warcforhumans.compression import Compressor
@@ -479,6 +480,17 @@ class WARCWriter:
             if self.warc_file:
                 self.warc_file.close()
             self.closed = True
+
+    def get_session(self) -> requests.Session:
+        """
+        :return: A requests Session that will write WARC files using this WARCWriter.
+        """
+        from warcforhumans.capture.adapter import WARCHTTPAdapter
+        
+        s = requests.Session()
+        s.mount("http://", WARCHTTPAdapter(warc_writer=self))
+        s.mount("https://", WARCHTTPAdapter(warc_writer=self))
+        return s
 
 def hash_to_string(h: HASH) -> str:
     """
