@@ -16,6 +16,8 @@ import socket
 
 from urllib3._base_connection import ProxyConfig, _TYPE_BODY, _ResponseOptions
 
+from warcforhumans.api import WARCWriter
+
 if TYPE_CHECKING:
     from urllib3._base_connection import BaseHTTPConnection as _BaseHTTPConnection
     from urllib3._base_connection import BaseHTTPSConnection as _BaseHTTPSConnection
@@ -28,11 +30,48 @@ from urllib3.util.connection import _TYPE_SOCKET_OPTIONS
 from urllib3.util.timeout import _TYPE_TIMEOUT, _DEFAULT_TIMEOUT, Timeout
 
 import warcforhumans.capture.util as util
-from warcforhumans.capture.adapter import BodyStreamFromH11Response
-from warcforhumans.capture.connection import ConnectionInfo, H11Connection, SecureConnectionOptions
-
+from warcforhumans.capture.connection import ConnectionInfo, H11Connection, SecureConnectionOptions, \
+    WARCWritingH11Connection
 
 DEFAULT_USER_AGENT: str = f"warcforhumans/{version("warcforhumans")} (like urllib3/{version("urllib3")}"
+CHUNK_SIZE = 2048
+
+
+class BodyStreamFromH11Response(typing.IO[bytes]):
+    # todo: implement all IO[bytes] methods
+    def __init__(self, conn: H11Connection):
+
+        self.conn: H11Connection = conn
+        self._closed = False
+
+    @override
+    def read(self, chunk_size: int = CHUNK_SIZE):
+        if self.closed:
+            return b""
+
+        event = self.conn.next_event(chunk_size)
+
+        if isinstance(event, h11.Data):
+            return event.data
+
+        if isinstance(event, h11.EndOfMessage):
+            self.closed = True
+            return b""
+
+        raise RuntimeError("Wrong event type!") # todo: better error type
+
+    @override
+    def close(self):
+        self.closed = True
+
+    @property
+    @override
+    def closed(self) -> bool:
+        return self._closed
+
+    @closed.setter
+    def closed(self, value: bool):
+        self._closed = value
 
 
 class HTTPConnection(_BaseHTTPConnection):
@@ -61,6 +100,7 @@ class HTTPConnection(_BaseHTTPConnection):
             socket_options: _TYPE_SOCKET_OPTIONS | None = default_socket_options,
             proxy: Url | None = None,
             proxy_config: ProxyConfig | None = None,
+            warc_writer: WARCWriter | None = None
     ) -> None:
         if proxy is not None or proxy_config is not None:
             raise NotImplementedError("warcforhumans HTTPConnection does not support proxies. Sorry!")
@@ -73,6 +113,7 @@ class HTTPConnection(_BaseHTTPConnection):
             self.port = self.default_port
 
         #self._validate_host()
+        self.warc_writer: WARCWriter | None = warc_writer
         self.host: str = host
         self.timeout: float | None = Timeout.resolve_default_timeout(timeout)
         self.source_address: tuple[str, int] | None = source_address
@@ -82,16 +123,21 @@ class HTTPConnection(_BaseHTTPConnection):
         self.conn: H11Connection | None = None
         self.secure_connection_options: SecureConnectionOptions | None = None
 
-        # The following attributes are required to exist by base classes:
 
     def _new_conn(self) -> H11Connection:
         if self.socket_options is None:
             self.socket_options = []
 
-        return self.ConnectionCls(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), secure_options=self.secure_connection_options)
+        #return self.ConnectionCls(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), secure_options=self.secure_connection_options)
+        conn = WARCWritingH11Connection(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), self.warc_writer, secure_options=self.secure_connection_options)
+        self.is_verified = conn.is_verified
+        print(f"conn reports as verified: {conn.is_verified}")
+        return conn
 
     @typing.override
     def connect(self) -> None:
+        print("asked to connect")
+
         if self.conn is None:
             self.conn = self._new_conn()
             return
@@ -116,6 +162,7 @@ class HTTPConnection(_BaseHTTPConnection):
 
     @typing.override
     def close(self) -> None:
+        self.conn.close()
         self.conn = None
 
     @property
@@ -128,7 +175,7 @@ class HTTPConnection(_BaseHTTPConnection):
     @typing.override
     def is_connected(self) -> bool:
         """Whether the connection is actively connected to any origin (proxy or target)"""
-        return self.conn is None
+        return self.conn is not None
 
     @property
     @typing.override
@@ -252,6 +299,7 @@ class HTTPConnection(_BaseHTTPConnection):
 class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[reportUnsafeMultipleInheritance]
     scheme: typing.ClassVar[str] = "https"
     default_port: typing.ClassVar[int] = 443
+    proxy_is_verified = False # Proxies are not supported so they are never verified
 
     def __init__(  # pyright: ignore[reportMissingSuperCall]
             self,
@@ -261,7 +309,7 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
             timeout: _TYPE_TIMEOUT = _DEFAULT_TIMEOUT,
             source_address: tuple[str, int] | None = None,
             blocksize: int = 16384,
-            socket_options: _TYPE_SOCKET_OPTIONS | None = None,
+            socket_options: _TYPE_SOCKET_OPTIONS | None = None, # todo check
             proxy: Url | None = None,
             proxy_config: ProxyConfig | None = None,
             cert_reqs: int | str | None = None,
@@ -278,6 +326,7 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
             cert_file: str | None = None,
             key_file: str | None = None,
             key_password: str | None = None,
+            warc_writer: WARCWriter | None = None
     ) -> None:
         super().__init__(
             host,
@@ -287,7 +336,8 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
             blocksize=blocksize,
             socket_options=socket_options,
             proxy=proxy,
-            proxy_config=proxy_config
+            proxy_config=proxy_config,
+            warc_writer=warc_writer
         )
         self.cert_reqs: int | str | None = cert_reqs
         self.assert_hostname: None | str | typing.Literal[False] = assert_hostname
@@ -303,8 +353,14 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
         self.cert_file: str | None = cert_file
         self.key_file: str | None = key_file
         self.key_password: str | None = key_password
+        if cert_reqs is None:
+            if self.ssl_context is not None:
+                self.cert_reqs = self.ssl_context.verify_mode
+            else:
+                self.cert_reqs = ssl.CERT_REQUIRED
+
         self.secure_connection_options: SecureConnectionOptions | None = SecureConnectionOptions(
-            cert_reqs=cert_reqs,
+            cert_reqs=self.cert_reqs,
             assert_hostname=assert_hostname,
             assert_fingerprint=assert_fingerprint,
             server_hostname=server_hostname,
@@ -320,11 +376,6 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
             key_password=key_password
         )
 
-        if cert_reqs is None:
-            if self.ssl_context is not None:
-                self.cert_reqs = self.ssl_context.verify_mode
-            else:
-                self.cert_reqs = ssl.CERT_REQUIRED
 
 
     def set_cert(

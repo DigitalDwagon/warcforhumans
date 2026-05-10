@@ -61,6 +61,7 @@ class H11Connection:
         self.throwaway: bool = throwaway
 
         self.closed: bool = False
+        self.is_verified: bool = False
         self.sock: socket.socket = self._create_socket(secure_options)
         self.conn: h11.Connection = h11.Connection(our_role=h11.CLIENT)
 
@@ -95,6 +96,7 @@ class H11Connection:
             )
 
             sock = wrapped.socket
+            self.is_verified = wrapped.is_verified
 
         return sock
 
@@ -153,9 +155,10 @@ class WARCWritingH11Connection(H11Connection):
     def __init__(self,
                  info: ConnectionInfo,
                  warc_writer: WARCWriter,
+                 secure_options: SecureConnectionOptions | None = None,
                  throwaway: bool = False
                  ) -> None:
-        super().__init__(info, throwaway=throwaway)
+        super().__init__(info, secure_options=secure_options, throwaway=throwaway)
 
         self.request_record: WARCRecord | None = None
         self.response_record: WARCRecord | None = None
