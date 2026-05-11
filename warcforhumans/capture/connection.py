@@ -209,6 +209,7 @@ class WARCWritingH11Connection(H11Connection):
         while True:
             event = self.conn.next_event()
             if isinstance(event, h11.NEED_DATA):
+                # This will read bytes past the end of the HTTP response. Extra bytes will be truncated when EndOfMessage is reached.
                 bytes_received = self.sock.recv(chunk_size)
                 self.conn.receive_data(bytes_received)
 
@@ -235,6 +236,15 @@ class WARCWritingH11Connection(H11Connection):
         if isinstance(event, h11.EndOfMessage):
             if not self.response_file:
                 raise RuntimeError("Response file content is none when trying to finish a response message.")
+
+            # Truncate any bytes that came after the end of the HTTP response
+            # trailing_data contains bytes that were not consumed by h11 for this message
+            excess_bytes = len(self.conn.trailing_data[0])
+            if excess_bytes > 0:
+                self.response_file.seek(0, 2) # seek to end
+                file_size = self.response_file.tell()
+                new_size = file_size - excess_bytes
+                self.response_file.truncate(new_size)
 
             if self.response_payload_hash is None:
                 raise RuntimeError("No payload hash when trying to finish response.")
