@@ -1,4 +1,5 @@
 import hashlib
+import ipaddress
 import socket
 import ssl
 import tempfile
@@ -169,7 +170,22 @@ class WARCWritingH11Connection(H11Connection):
             if self.info.scheme != "http" and self.info.scheme != "https":
                 raise ValueError("Scheme for connection is not http or https.")
 
-            url: str = self.info.scheme + "://" + self.info.host
+            # the host should be wrapped in [] if it's an IPv6 literal to comply with the WARC spec
+            url: str = self.info.scheme + "://"
+            try:
+                host = self.info.host
+                if self.info.host.startswith("[") and self.info.host.endswith("]"):
+                    # strip for parsing
+                    host = host[1:-1]
+
+                ip = ipaddress.ip_address(host)
+                if isinstance(ip, ipaddress.IPv6Address):
+                    url += f"[{ip}]"
+                else:
+                    url += self.info.host
+            except ValueError:
+                # not an IP address
+                url += self.info.host
 
             if self.info.scheme == "https" and self.info.port != 443:
                 url += ":" + str(self.info.port)
