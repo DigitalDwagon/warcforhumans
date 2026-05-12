@@ -16,6 +16,7 @@ from warcforhumans.api import WARCWriter, WARCRecord
 from warcforhumans.capture import util
 
 CHUNK_SIZE = 2048
+MIN_REVISIT_PAYLOAD_SIZE = 1024
 
 class ConnectionInfo(typing.NamedTuple):
     scheme: str
@@ -252,18 +253,24 @@ class WARCWritingH11Connection(H11Connection):
 
             revisit, headers = self.warc_writer.check_for_revisit(self.response_record.headers[WARCRecord.WARC_PAYLOAD_DIGEST][0])
 
+            # grab up to the first \r\n\r\n (header block)
+            self.response_file.seek(0)  # ensure we are back at the start
+            header_content = b""
+            while True:
+                line = self.response_file.readline(CHUNK_SIZE)
+                header_content += line
+                if not line or line == b"\r\n":
+                    break
+
+            # Don't revisit if the payload is too small
+            payload_start = self.response_file.tell()
+            self.response_file.seek(0, 2) # seek to end
+            revisit = self.response_file.tell() - payload_start >= MIN_REVISIT_PAYLOAD_SIZE and revisit
+
+
             if revisit:
                 self.response_record.add_headers(headers)
                 self.response_record.set_type("revisit")
-
-                # grab up to the first \r\n\r\n (header block)
-                self.response_file.seek(0)  # ensure we are back at the start
-                header_content = b""
-                while True:
-                    line = self.response_file.readline(CHUNK_SIZE)
-                    header_content += line
-                    if not line or line == b"\r\n":
-                        break
 
                 self.response_record.set_content(header_content)
             else:
