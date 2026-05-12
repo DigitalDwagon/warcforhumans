@@ -1,5 +1,4 @@
 import http.client
-from email.message import Message
 from http.client import ResponseNotReady
 from importlib.metadata import version
 import os

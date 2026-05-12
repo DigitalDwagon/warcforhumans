@@ -122,7 +122,7 @@ class WARCRecord:
         :param content: The content of the record, as bytes or a seekable file object.
         :param content_type: The ``Content-Type`` to set for the record.
         :param block_digest: A hash of content (as a hash object), used as the ``WARC-Block-Digest``. If not set, one
-         will be generated with SHA-256.
+         will be generated with SHA-1.
         :param close: If content is a file object, whether it should be closed after the record is written.
         :return:
         """
@@ -202,6 +202,8 @@ class WARCRecord:
         return self.headers[WARCRecord.WARC_RECORD_ID][0]
 
     def get_type(self) -> str | None:
+        if WARCRecord.WARC_TYPE not in self.headers:
+            return None
         return self.headers[WARCRecord.WARC_TYPE][0]
 
     def add_headers_for_socket(self, sock: socket):
@@ -414,9 +416,7 @@ class WARCWriter:
         :param record_id: ID of the record to discard
         :return:
         """
-        for record in self.pending_records:
-            if record.get_id() == record_id:
-                self.pending_records.remove(record)
+        self.pending_records = [r for r in self.pending_records if r.get_id() != record_id]
 
 
     def write_record(self, record: WARCRecord, rotate = True):
