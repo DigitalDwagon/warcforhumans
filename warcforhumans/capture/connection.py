@@ -286,7 +286,11 @@ class WARCWritingH11Connection(H11Connection):
             self.response_payload_hash = None
             self.response_file = None
 
-            self.start_next_cycle()
+            if self.conn.our_state == h11.MUST_CLOSE:
+                self.closed = True
+                self.sock.close()
+            else:
+                self.start_next_cycle()
 
         return event
 
