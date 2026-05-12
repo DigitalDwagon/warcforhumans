@@ -2,12 +2,10 @@ import os
 import queue
 
 import pytest
-import requests
 import socket
 import threading
 
 from warcforhumans.api import WARCWriter
-import warcforhumans.capture.http as capture
 
 @pytest.fixture
 def fake_http_server():
@@ -36,13 +34,13 @@ def fake_http_server():
 def warc_writer(tmp_path):
     warc_path = str(tmp_path / "test")
     writer = WARCWriter(warc_path)
-    capture.warc_writer = writer
     return writer
 
 @pytest.fixture
 def verify_content_match(tmp_path, warc_writer, fake_http_server):
     def verify(response_content):
-        r = requests.get(fake_http_server(response_content))
+        session = warc_writer.get_session()
+        r = session.get(fake_http_server(response_content))
         warc_writer.close()
         fp = tmp_path / "test.warc"
 

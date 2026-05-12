@@ -8,13 +8,13 @@ warcforhumans is a Python package that patches Python's native `http.client` to 
 Simple example:
 
 ```python
-import requests
-import warcforhumans.capture.http as capture
 from warcforhumans.api import WARCWriter
 
 warc_writer = WARCWriter("example", rotate_mb=0)
-capture.warc_writer = warc_writer
-r = requests.get("http://digitaldragon.dev")
+
+s = warc_writer.get_session() 
+# This requests session will capture http(s) requests to WARC!
+r = s.get("h/ttp://digitaldragon.dev")
 warc_writer.close()
 
 ```
@@ -22,8 +22,6 @@ warc_writer.close()
 With ZSTD compression:
 
 ```python
-import requests
-import warcforhumans.capture.http as capture
 from warcforhumans.api import WARCWriter
 from warcforhumans.compression import ZSTDCompressor
 
@@ -31,16 +29,11 @@ warc_writer = WARCWriter("example-$date-$number-$serial",
                          compressor=ZSTDCompressor(level=11),
                          warcinfo_fields={"operator": "some person"},
                          software="example-script/0.1")
-capture.warc_writer = warc_writer
-r = requests.get("http://digitaldragon.dev")
-warc_writer.close()
 ```
 
 or a ZSTD dictionary
 
 ```python
-import requests
-import warcforhumans.capture.http as capture
 from warcforhumans.api import WARCWriter
 from warcforhumans.compression import ZSTDCompressor
 
@@ -51,9 +44,6 @@ warc_writer = WARCWriter("example-$date-$number-$serial",
                          compressor=ZSTDCompressor(level=11, dictionary=dictionary),
                          warcinfo_fields={"operator": "some person"},
                          software="example-script/0.1")
-capture.warc_writer = warc_writer
-r = requests.get("http://digitaldragon.dev")
-warc_writer.close()
 ```
 
 

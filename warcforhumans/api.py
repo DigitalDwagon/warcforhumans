@@ -1,15 +1,22 @@
+from __future__ import annotations
+
 import base64
 import hashlib
 import io
 import random
 import string
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from importlib.metadata import version
+from io import BufferedRandom
 from socket import socket
 from ssl import SSLSocket
 from typing import Iterator, BinaryIO
+
+import requests
+from _hashlib import HASH
 
 from warcforhumans.compression import Compressor
 
@@ -40,8 +47,9 @@ class WARCRecord:
     WARC_SEGMENT_TOTAL_LENGTH = "WARC-Segment-Total-Length"
     WARC_PROTOCOL = "WARC-Protocol" # https://github.com/iipc/warc-specifications/issues/42
     WARC_CIPHER_SUITE = "WARC-Cipher-Suite" # https://github.com/iipc/warc-specifications/issues/86
+    HTTP_1_1 = "http/1.1"
 
-    def __init__(self, record_type: str = None, content_type: str = None, url: str = None, sock: socket = None):
+    def __init__(self, record_type: str = None, content_type: str = None, url: str | None = None, sock: socket = None):
         """
         Creates a new WARC record with a random ID.
         :param record_type: The type of WARC record. Equivalent to ``set_type``
@@ -70,7 +78,10 @@ class WARCRecord:
         if sock is not None:
             self.add_headers_for_socket(sock)
 
-    def set_header(self, key: str, value):
+        self._partial_content: bytes | BufferedRandom = b""
+        self.max_in_memory_record_size: int = 1024 * 1024
+
+    def set_header(self, key: str, value: str | list[str]) -> None:
         """
         Sets a header on the record, **overwriting** the value if one is already set.
         :param key: Header name
@@ -105,13 +116,13 @@ class WARCRecord:
 
         self.set_header(WARCRecord.WARC_TYPE, record_type)
 
-    def set_content(self, content: bytes | BinaryIO, content_type: str = None, block_digest = None, close: bool = False):
+    def set_content(self, content: bytes | BinaryIO, content_type: str | None = None, block_digest: str | None = None, close: bool = False) -> None:
         """
         Sets the body content of the WARC record.
         :param content: The content of the record, as bytes or a seekable file object.
         :param content_type: The ``Content-Type`` to set for the record.
         :param block_digest: A hash of content (as a hash object), used as the ``WARC-Block-Digest``. If not set, one
-         will be generated with SHA-256.
+         will be generated with SHA-1.
         :param close: If content is a file object, whether it should be closed after the record is written.
         :return:
         """
@@ -126,7 +137,7 @@ class WARCRecord:
             raise ValueError("Unknown record content - expected a bytes or BufferedRandom like object")
 
 
-    def _set_content_bytes(self, content: bytes, block_digest = None):
+    def _set_content_bytes(self, content: bytes, block_digest = None) -> None:
         self.content = content
         self.set_header(WARCRecord.CONTENT_LENGTH, str(len(content)))
 
@@ -135,7 +146,7 @@ class WARCRecord:
         self.set_header(WARCRecord.WARC_BLOCK_DIGEST, hash_to_string(block_digest))
 
 
-    def _set_content_stream(self, stream: BinaryIO, close: bool = False, block_digest = None):
+    def _set_content_stream(self, stream: BinaryIO, close: bool = False, block_digest = None) -> None:
         self.content = stream
         stream.seek(0, io.SEEK_END)
         self.set_header(WARCRecord.CONTENT_LENGTH, str((stream.tell())))
@@ -149,7 +160,24 @@ class WARCRecord:
 
         self.set_header(WARCRecord.WARC_BLOCK_DIGEST, hash_to_string(block_digest))
 
-    def date(self, date: datetime = None):
+    def partial_content(self, content: bytes, finish: bool = False) -> None:
+        if isinstance(self._partial_content, bytes):
+            if len(self._partial_content) + len(content) > self.max_in_memory_record_size:
+                file = tempfile.TemporaryFile()
+                _ = file.write(self._partial_content)
+                _ = file.write(content)
+                self._partial_content = file
+            else:
+                self._partial_content += content
+        else:
+            _ = self._partial_content.write(content)
+
+        if finish:
+            self.set_content(self._partial_content, close=True)
+
+
+
+    def date(self, date: datetime | None = None):
         """
         Sets the timestamp of the WARC to the datetime provided, or the current time if no time is provided.
         :param date: The datetime to set.
@@ -174,6 +202,8 @@ class WARCRecord:
         return self.headers[WARCRecord.WARC_RECORD_ID][0]
 
     def get_type(self) -> str | None:
+        if WARCRecord.WARC_TYPE not in self.headers:
+            return None
         return self.headers[WARCRecord.WARC_TYPE][0]
 
     def add_headers_for_socket(self, sock: socket):
@@ -190,12 +220,15 @@ class WARCRecord:
             self.add_header(WARCRecord.WARC_PROTOCOL, encryption_protocol.lower() + "/" + protocol_version)
             self.add_header(WARCRecord.WARC_CIPHER_SUITE, sock.cipher()[0])
 
-    def concurrent(self, record):
+    def concurrent(self, record: WARCRecord) -> None:
         """
         Sets ``WARC-Concurrent-To`` headers on both given records, pointing at each other.
         :param record: The other record.
         :return:
         """
+        if self.headers[WARCRecord.WARC_DATE] != record.headers[WARCRecord.WARC_DATE]:
+            raise ValueError("The WARC-Date fields of records that should be concurrent are not the same.")
+
         self.set_header(WARCRecord.WARC_CONCURRENT_TO, record.get_id())
         record.set_header(WARCRecord.WARC_CONCURRENT_TO, self.get_id())
 
@@ -383,9 +416,7 @@ class WARCWriter:
         :param record_id: ID of the record to discard
         :return:
         """
-        for record in self.pending_records:
-            if record.get_id() == record_id:
-                self.pending_records.remove(record)
+        self.pending_records = [r for r in self.pending_records if r.get_id() != record_id]
 
 
     def write_record(self, record: WARCRecord, rotate = True):
@@ -450,7 +481,18 @@ class WARCWriter:
                 self.warc_file.close()
             self.closed = True
 
-def hash_to_string(h) -> str:
+    def get_session(self) -> requests.Session:
+        """
+        :return: A requests Session that will write WARC files using this WARCWriter.
+        """
+        from warcforhumans.capture.adapter import WARCHTTPAdapter
+        
+        s = requests.Session()
+        s.mount("http://", WARCHTTPAdapter(warc_writer=self))
+        s.mount("https://", WARCHTTPAdapter(warc_writer=self))
+        return s
+
+def hash_to_string(h: HASH) -> str:
     """
     Converts a hashlib hash object to a string for writing WARC digest headers.
     :param h: The hash to convert
