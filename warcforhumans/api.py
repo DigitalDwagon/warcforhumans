@@ -47,7 +47,7 @@ class WARCRecord:
     WARC_SEGMENT_TOTAL_LENGTH = "WARC-Segment-Total-Length"
     WARC_PROTOCOL = "WARC-Protocol" # https://github.com/iipc/warc-specifications/issues/42
     WARC_CIPHER_SUITE = "WARC-Cipher-Suite" # https://github.com/iipc/warc-specifications/issues/86
-    HTTP_1_1 = "HTTP/1.1"
+    HTTP_1_1 = "http/1.1"
 
     def __init__(self, record_type: str = None, content_type: str = None, url: str | None = None, sock: socket = None):
         """
