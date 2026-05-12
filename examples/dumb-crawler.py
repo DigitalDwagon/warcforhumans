@@ -3,7 +3,6 @@ import argparse
 import requests
 from urllib3.exceptions import InsecureRequestWarning
 
-import warcforhumans.capture.http as capture
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 
@@ -17,7 +16,7 @@ def dumb_crawler(seed_url, max_depth=1, max_urls=-1):
                         software="dumb-crawler"
                         )
 
-    capture.warc_writer = writer
+    s = writer.get_session()
 
     # Suppress "insecure request" warning
     requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
@@ -36,7 +35,7 @@ def dumb_crawler(seed_url, max_depth=1, max_urls=-1):
 
 
 
-        r = requests.get(url, timeout=5, verify=False)
+        r = s.get(url, timeout=15, verify=False)
         print(f"{req_count}={r.status_code} {url}")
         req_count += 1
 
