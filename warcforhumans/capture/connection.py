@@ -257,6 +257,7 @@ class WARCWritingH11Connection(H11Connection):
                 self.response_record.set_type("revisit")
 
                 # grab up to the first \r\n\r\n (header block)
+                self.response_file.seek(0)  # ensure we are back at the start
                 header_content = b""
                 while True:
                     line = self.response_file.readline(CHUNK_SIZE)
@@ -284,11 +285,7 @@ class WARCWritingH11Connection(H11Connection):
 
     @override
     def close(self) -> None:
-        self.conn.send(h11.ConnectionClosed())
-
-        while not isinstance(self.next_event(CHUNK_SIZE), h11.PAUSED):
-            # if the connection needs to close before a response is fully read, this reads the whole thing in so WARC
-            # records can be written
-            pass
+        if self.conn.our_state != h11.IDLE or self.conn.their_state != h11.IDLE:
+            self.events_until_end(CHUNK_SIZE)
 
         self.sock.close()
