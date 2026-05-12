@@ -1,7 +1,8 @@
 # warcforhumans
-Note: This project is still a work-in-progress, and has not been extensively tested.
+warcforhumans is a Python package that lets you write WARC records with a simple `requests` session.
 
-warcforhumans is a Python package that patches Python's native `http.client` to generate WARC files. This allows you to use `http.client` or libraries that rely on it (eg. `requests`, `urllib3`, etc) to write WARCs.
+> [!CAUTION]
+> This project is still a work-in-progress, and has not been extensively tested.
 
 # Usage
 
@@ -12,9 +13,8 @@ from warcforhumans.api import WARCWriter
 
 warc_writer = WARCWriter("example", rotate_mb=0)
 
-s = warc_writer.get_session() 
-# This requests session will capture http(s) requests to WARC!
-r = s.get("h/ttp://digitaldragon.dev")
+s = warc_writer.get_session()
+r = s.get("http://digitaldragon.dev")
 warc_writer.close()
 
 ```
@@ -31,7 +31,7 @@ warc_writer = WARCWriter("example-$date-$number-$serial",
                          software="example-script/0.1")
 ```
 
-or a ZSTD dictionary
+or a ZSTD dictionary:
 
 ```python
 from warcforhumans.api import WARCWriter
