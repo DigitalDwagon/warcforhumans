@@ -11,6 +11,7 @@ from typing import override
 import h11
 from _hashlib import HASH
 from urllib3.connection import _ssl_wrap_socket_and_match_hostname
+from urllib3.exceptions import ProtocolError
 
 import warcforhumans.api as warc
 from warcforhumans.api import WARCWriter, WARCRecord
@@ -118,8 +119,11 @@ class H11Connection:
             return event
 
     def close(self) -> None:
+        if self.closed:
+            return
         self.conn.send(h11.ConnectionClosed())
         self.sock.close()
+        self.closed = True
 
     def start_next_cycle(self) -> None:
         our_state = self.conn.our_state
@@ -228,6 +232,8 @@ class WARCWritingH11Connection(H11Connection):
             if isinstance(event, h11.NEED_DATA):
                 # This will read bytes past the end of the HTTP response. Extra bytes will be truncated when EndOfMessage is reached.
                 bytes_received = self.sock.recv(chunk_size)
+                if bytes_received == b"":
+                    raise ProtocolError("Remote host closed the connection while we expected more data.")
                 self.conn.receive_data(bytes_received)
 
                 if self.response_file is None:
@@ -312,7 +318,11 @@ class WARCWritingH11Connection(H11Connection):
 
     @override
     def close(self) -> None:
+        if self.closed:
+            return
+
         if self.conn.our_state != h11.IDLE or self.conn.their_state != h11.IDLE:
             self.events_until_end(CHUNK_SIZE)
 
         self.sock.close()
+        self.closed = True
