@@ -232,8 +232,6 @@ class WARCWritingH11Connection(H11Connection):
             if isinstance(event, h11.NEED_DATA):
                 # This will read bytes past the end of the HTTP response. Extra bytes will be truncated when EndOfMessage is reached.
                 bytes_received = self.sock.recv(chunk_size)
-                if bytes_received == b"":
-                    raise ProtocolError("Remote host closed the connection while we expected more data.")
                 self.conn.receive_data(bytes_received)
 
                 if self.response_file is None:
