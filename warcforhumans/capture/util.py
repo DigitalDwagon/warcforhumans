@@ -3,7 +3,9 @@ import urllib.parse
 _TYPE_SOCKET_OPTIONS = list[tuple[int, int, int | bytes]]
 
 def normalize_netloc(orig: str, scheme: str | None = None, port: int | None = None) -> str:
-    if port is not None:
+    if (port is not None
+            and not (scheme == "http" and port == 80)
+            and not (scheme == "https" and port == 443)):
         orig = orig + ":" + str(port)
 
     if scheme is not None:
