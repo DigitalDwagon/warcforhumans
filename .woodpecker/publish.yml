@@ -1,0 +1,15 @@
+when:
+  - event: tag
+
+steps:
+  - name: publish-pypi
+    image: python:3.12
+
+    environment:
+      PYPI_TOKEN:
+        from_secret: pypi_token
+
+    commands:
+      - python -m pip install --upgrade pip uv
+      - uv build
+      - uv publish --token "$PYPI_TOKEN"
