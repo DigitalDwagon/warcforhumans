@@ -241,6 +241,9 @@ class WARCRecord:
         if self.content is None:
             raise ValueError("Content is not set")
 
+        if self.get_type() is None:
+            raise ValueError("WARC record type is not set")
+
         mandatory_headers = [WARCRecord.WARC_RECORD_ID, WARCRecord.CONTENT_LENGTH, WARCRecord.WARC_DATE, WARCRecord.WARC_TYPE]
         for header in mandatory_headers:
             if header not in self.headers:
