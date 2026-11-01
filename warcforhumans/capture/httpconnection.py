@@ -14,6 +14,7 @@ import socket
 
 from urllib3._base_connection import ProxyConfig, _TYPE_BODY, _ResponseOptions
 
+from tests.conftest import warc_writer
 from warcforhumans.api import WARCWriter
 
 if TYPE_CHECKING:
@@ -98,7 +99,7 @@ class HTTPConnection(_BaseHTTPConnection):
             socket_options: _TYPE_SOCKET_OPTIONS | None = default_socket_options,
             proxy: Url | None = None,
             proxy_config: ProxyConfig | None = None,
-            warc_writer: WARCWriter
+            warc_writer: WARCWriter | None = None
     ) -> None:
         if proxy is not None or proxy_config is not None:
             raise NotImplementedError("warcforhumans HTTPConnection does not support proxies. Sorry!")
@@ -109,7 +110,7 @@ class HTTPConnection(_BaseHTTPConnection):
             self.port = self.default_port
 
         #self._validate_host()
-        self.warc_writer: WARCWriter = warc_writer
+        self.warc_writer: WARCWriter | None = warc_writer
         self.host: str = host
         self.timeout: float | None = Timeout.resolve_default_timeout(timeout)
         self.source_address: tuple[str, int] | None = source_address
@@ -124,7 +125,8 @@ class HTTPConnection(_BaseHTTPConnection):
         if self.socket_options is None:
             self.socket_options = []
 
-        #return self.ConnectionCls(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), secure_options=self.secure_connection_options)
+        if not warc_writer:
+            raise ValueError("Tried to open a connection, but no WARCWriter is set!")
         conn = WARCWritingH11Connection(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), self.warc_writer, secure_options=self.secure_connection_options)
         self.is_verified = conn.is_verified
         return conn
