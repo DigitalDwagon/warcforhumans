@@ -46,12 +46,23 @@ class SecureConnectionOptions(typing.NamedTuple):
     key_password: str | None = None
 
 class H11Connection:
+    """
+    This class serves as a base h11 connection for the implementation of the WARC writing h11 connection.
+    """
+
     def __init__(self,
                  info: ConnectionInfo,
                  *,
                  secure_options: SecureConnectionOptions | None = None,
                  throwaway: bool = False
                  ) -> None:
+        """
+        Create a new connection.
+        :param info: Connection information
+        :param secure_options: Secure connection options for the SSLSocket
+        :param throwaway: Whether this HTTP connection should automatically close at the end of the message.
+        """
+
         self.info: ConnectionInfo = info
         self.throwaway: bool = throwaway
 
@@ -61,6 +72,11 @@ class H11Connection:
         self.conn: h11.Connection = h11.Connection(our_role=h11.CLIENT)
 
     def _create_socket(self, secure_options: SecureConnectionOptions | None) -> socket.socket:
+        """
+        Create a socket for the connection.
+        :param secure_options: Secure connection options for the SSLSocket
+        :return: A connected socket
+        """
         sock: socket.socket = socket.create_connection((self.info.host, self.info.port), timeout=self.info.connect_timeout)
         sock.settimeout(self.info.read_timeout)
 
@@ -75,7 +91,7 @@ class H11Connection:
             context = options.ssl_context
 
             if context is None:
-                if options.cert_reqs in (ssl.CERT_NONE, "CERT_NONE"):
+                if options.cert_reqs in (ssl.CERT_NONE, "CERT_NONE") or not self.info.verify:
                     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
                     context.check_hostname = False
                     context.verify_mode = ssl.CERT_NONE
@@ -109,10 +125,19 @@ class H11Connection:
         return sock
 
     def send_event(self, event: h11.Event) -> None:
+        """
+        Send an event to the connection.
+        :param event: The event to send
+        """
         b = self.conn.send(event)
         self.sock.sendall(cast(Buffer, b))
 
     def next_event(self, chunk_size: int) -> h11.Event | type[h11.PAUSED]:
+        """
+        Get the next h11 event from the connection
+        :param chunk_size: The amount of data to read in from the socket at a time, if necessary
+        :return: The next h11 event from the connection
+        """
         while True:
             event = self.conn.next_event()
             if isinstance(event, h11.NEED_DATA):
@@ -130,6 +155,9 @@ class H11Connection:
             return event
 
     def close(self) -> None:
+        """
+        Close the h11 connection and the socket.
+        """
         if self.closed:
             return
         self.conn.send(h11.ConnectionClosed())
@@ -137,6 +165,10 @@ class H11Connection:
         self.closed = True
 
     def start_next_cycle(self) -> None:
+        """
+        Start the next connection cycle after a successful request -> response pair.
+        :return:
+        """
         our_state = self.conn.our_state
         their_state = self.conn.their_state
 
@@ -155,6 +187,11 @@ class H11Connection:
         self.conn.start_next_cycle()
 
     def events_until_end(self, chunk_size: int) -> Generator[h11.Event | type[h11.PAUSED]]:
+        """
+        Yield every event from the connection until the end of the message.
+        :param chunk_size: he amount of data to read in from the socket at a time, if necessary
+        :return:
+        """
         while True:
             event = self.next_event(chunk_size)
             yield event
@@ -169,9 +206,17 @@ class WARCWritingH11Connection(H11Connection):
                  secure_options: SecureConnectionOptions | None = None,
                  throwaway: bool = False
                  ) -> None:
+        """
+        Create a h11 connection that will write WARC files.
+        :param info: The connection info
+        :param warc_writer: The WARC writer that captured WARC records will be written to
+        :param secure_options: Secure connection options
+        :param throwaway: Whether to close this connection after a successful request -> response pair
+        """
         super().__init__(info, secure_options=secure_options, throwaway=throwaway)
 
         self.request_record: WARCRecord | None = None
+        self.partial_request: bool = False
         self.response_record: WARCRecord | None = None
         self.response_payload_hash: HASH | None = None
         self.response_file: BufferedRandom | None = None
@@ -180,6 +225,10 @@ class WARCWritingH11Connection(H11Connection):
 
     @override
     def send_event(self, event: h11.Event) -> None:
+        """
+        Send an event to the connection.
+        :param event: The event to send. The first event sent is required to be an h11.Request
+        """
         if isinstance(event, h11.Request):
             # todo check if there's another wip record
             if self.info.scheme != "http" and self.info.scheme != "https":
@@ -209,6 +258,7 @@ class WARCWritingH11Connection(H11Connection):
 
             url += event.target.decode("iso-8859-1")
 
+            self.partial_request = True
             request_record: WARCRecord = WARCRecord("request", url=url, content_type=WARCRecord.CONTENT_HTTP_REQUEST, sock=self.sock)
             request_record.add_header(WARCRecord.WARC_PROTOCOL, WARCRecord.HTTP_1_1)
             request_record.date()
@@ -223,9 +273,18 @@ class WARCWritingH11Connection(H11Connection):
         if b is not None:
             self.sock.sendall(b)
             self.request_record.partial_content(b, finish=isinstance(event, h11.EndOfMessage))
+            if isinstance(event, h11.EndOfMessage):
+                self.partial_request = False
+
 
     @override
     def next_event(self, chunk_size: int) -> h11.Event | type[h11.PAUSED]:
+        """
+        Get the next event from the connection
+        :param chunk_size: The amount of data to read in from the socket at a time, if necessary
+        :return: The next event from the connection until the end of the message
+        """
+
         if self.request_record is None:
             raise RuntimeError("Started receiving a response, but there's no open request record.")
 
@@ -330,11 +389,21 @@ class WARCWritingH11Connection(H11Connection):
 
     @override
     def close(self) -> None:
+        """
+        Closes the connection and the socket. This will read to the end of the current response and write out any relevant
+        WARC records if necesary.
+        :return:
+        """
         if self.closed:
             return
 
+        if self.partial_request:
+            raise RuntimeError("Cannot cleanly close connection: the HTTP request wasn't completed, so the request " +
+                               "WARC record couldn't be closed. Send h11.EndOfMessage() after the request body before closing.")
+
         if self.conn.our_state != h11.IDLE or self.conn.their_state != h11.IDLE:
-            self.events_until_end(CHUNK_SIZE)
+            for _ in self.events_until_end(CHUNK_SIZE):
+                pass
 
         self.sock.close()
         self.closed = True
