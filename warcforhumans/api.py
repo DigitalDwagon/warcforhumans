@@ -49,7 +49,7 @@ class WARCRecord:
     WARC_CIPHER_SUITE = "WARC-Cipher-Suite" # https://github.com/iipc/warc-specifications/issues/86
     HTTP_1_1 = "http/1.1"
 
-    def __init__(self, record_type: str = None, content_type: str = None, url: str | None = None, sock: socket = None):
+    def __init__(self, record_type: str | None = None, content_type: str | None = None, url: str | None = None, sock: socket | None = None):
         """
         Creates a new WARC record with a random ID.
         :param record_type: The type of WARC record. Equivalent to ``set_type``
@@ -216,9 +216,13 @@ class WARCRecord:
         self.set_header(WARCRecord.WARC_IP_ADDRESS, sock.getpeername()[0])
 
         if isinstance(sock, SSLSocket):
-            encryption_protocol, protocol_version = sock.cipher()[1].split("v")
+            cipher = sock.cipher()
+            if not cipher:
+                return
+
+            encryption_protocol, protocol_version = cipher[1].split("v")
             self.add_header(WARCRecord.WARC_PROTOCOL, encryption_protocol.lower() + "/" + protocol_version)
-            self.add_header(WARCRecord.WARC_CIPHER_SUITE, sock.cipher()[0])
+            self.add_header(WARCRecord.WARC_CIPHER_SUITE, cipher[0])
 
     def concurrent(self, record: WARCRecord) -> None:
         """
@@ -273,7 +277,7 @@ class WARCRecord:
             self.content.close()
 
 class WARCFile:
-    def __init__(self, file_path: str, create_warcinfo: bool = True, warcinfo_fields = None, compressor: Compressor = None, software: str = ""):
+    def __init__(self, file_path: str, create_warcinfo: bool = True, warcinfo_fields: dict[str, str] | None = None, compressor: Compressor | None = None, software: str = ""):
         """
         Creates a new WARCFile to write WARC records to.
         :param file_path: Where the file should go, without ``.warc``
@@ -296,7 +300,10 @@ class WARCFile:
         self._compressor.start(self.file)
 
         if create_warcinfo:
-            self.create_warcinfo_record(fields=warcinfo_fields,software=software)
+            self.create_warcinfo_record(
+                fields = warcinfo_fields if warcinfo_fields else {},
+                software = software
+            )
 
     def create_warcinfo_record(self, software: str = "", fields: dict[str, str] = None):
         """
@@ -348,10 +355,10 @@ class WARCFile:
 class WARCWriter:
     def __init__(self,
                  template: str,
-                 compressor: Compressor = None,
+                 compressor: Compressor | None = None,
                  rotate_mb: int = 15*1024,
                  software: str = "",
-                 warcinfo_fields: dict[str, str] = None,
+                 warcinfo_fields: dict[str, str] | None = None,
                  revisit: bool = True
                  ):
         """
@@ -368,20 +375,20 @@ class WARCWriter:
         :param warcinfo_fields: Fields to add to the warcinfo record.
         :param revisit: Whether to keep track of the information necessary (in memory) for ``check_for_revisit``
         """
-        self.warc_file = None
-        self.compressor = compressor if compressor else Compressor()
-        self.template = template
-        self.rotate_mb = rotate_mb
+        self.warc_file :WARCFile | None = None
+        self.compressor: Compressor = compressor if compressor else Compressor()
+        self.template: str = template
+        self.rotate_mb: int = rotate_mb
         self.pending_records: list[WARCRecord] = []
-        self.software = software
-        self.warcinfo_fields = warcinfo_fields
-        self.files_made = 0
-        self.closed = False
-        self.revisit = revisit
+        self.software: str = software
+        self.warcinfo_fields: dict[str, str] = warcinfo_fields if warcinfo_fields else {}
+        self.files_made: int = 0
+        self.closed: bool = False
+        self.revisit: bool = revisit
         if revisit:
             self.revisit_cache: dict[str, tuple[str, str, str]] = {} # payload-digest -> (warc-record-id, warc-date, warc-target-uri)
 
-    def _create_file(self, rotate = True):
+    def _create_file(self, rotate: bool = True):
         if (    self.warc_file
                 and rotate
                 and self.rotate_mb > 0
@@ -467,7 +474,7 @@ class WARCWriter:
         return True, headers
 
 
-    def write_records(self, records: list[WARCRecord], rotate_between=False):
+    def write_records(self, records: list[WARCRecord], rotate_between: bool = False):
         """
         Write multiple records to the WARC file
         :param records: The records to write

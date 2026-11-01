@@ -4,9 +4,9 @@ import socket
 import ssl
 import tempfile
 import typing
-from collections.abc import Generator
+from collections.abc import Buffer, Generator
 from io import BufferedRandom
-from typing import override
+from typing import cast, override
 
 import h11
 from _hashlib import HASH
@@ -110,7 +110,7 @@ class H11Connection:
 
     def send_event(self, event: h11.Event) -> None:
         b = self.conn.send(event)
-        self.sock.sendall(b)
+        self.sock.sendall(cast(Buffer, b))
 
     def next_event(self, chunk_size: int) -> h11.Event | type[h11.PAUSED]:
         while True:
@@ -322,6 +322,9 @@ class WARCWritingH11Connection(H11Connection):
                 self.sock.close()
             else:
                 self.start_next_cycle()
+
+        # h11.NEED_DATA can never make it out of the loop, but this makes pyright happy.
+        assert event is h11.PAUSED or isinstance(event, h11.Event)
 
         return event
 

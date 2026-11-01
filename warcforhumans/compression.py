@@ -1,4 +1,4 @@
-from typing import BinaryIO
+from typing import BinaryIO, override
 
 import zstandard as zstd
 
@@ -40,18 +40,19 @@ class Compressor:
 
 
 class ZSTDCompressor(Compressor):
-    def __init__(self, dictionary: bytes = None, level: int = 11):
+    def __init__(self, dictionary: bytes | None = None, level: int = 11):
         """
         A compressor for zstd WARCs.
         :param dictionary: The compression dictionary to use, if any.
         :param level: zstd compression level.
         """
-        self.level = level
-        self.dict = dictionary
+        self.level: int = level
+        self.dict: bytes | None = dictionary
 
         # detect if dictionary is zstd-compressed
 
-    def write_record(self, record: 'WARCRecord', file: BinaryIO):
+    @override
+    def write_record(self, record: 'WARCRecord', file: BinaryIO) -> None:
         if self.dict is not None:
             cctx = zstd.ZstdCompressor(level=self.level, dict_data=zstd.ZstdCompressionDict(self.dict))
         else:
@@ -62,9 +63,11 @@ class ZSTDCompressor(Compressor):
             compressor.write(chunk)
         compressor.flush(zstd.FLUSH_FRAME)
 
+    @override
     def file_extension(self) -> str:
         return ".zst"
 
+    @override
     def start(self, file: BinaryIO):
         if self.dict is None:
             return
@@ -86,11 +89,13 @@ class GZIPCompressor(Compressor):
         """
         self.level = level
 
+    @override
     def write_record(self, record: 'WARCRecord', file: BinaryIO):
         import gzip
         with gzip.GzipFile(fileobj=file, mode='ab', compresslevel=self.level) as gz_file:
             for chunk in record.serialize_stream():
                 gz_file.write(chunk)
 
+    @override
     def file_extension(self) -> str:
         return ".gz"

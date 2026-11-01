@@ -7,7 +7,6 @@ from typing_extensions import TYPE_CHECKING, override
 
 import h11
 from urllib3 import HTTPResponse
-import urllib3.connection
 from urllib3.exceptions import ResponseError
 import urllib3.util
 import typing
@@ -99,7 +98,7 @@ class HTTPConnection(_BaseHTTPConnection):
             socket_options: _TYPE_SOCKET_OPTIONS | None = default_socket_options,
             proxy: Url | None = None,
             proxy_config: ProxyConfig | None = None,
-            warc_writer: WARCWriter | None = None
+            warc_writer: WARCWriter
     ) -> None:
         if proxy is not None or proxy_config is not None:
             raise NotImplementedError("warcforhumans HTTPConnection does not support proxies. Sorry!")
@@ -110,7 +109,7 @@ class HTTPConnection(_BaseHTTPConnection):
             self.port = self.default_port
 
         #self._validate_host()
-        self.warc_writer: WARCWriter | None = warc_writer
+        self.warc_writer: WARCWriter = warc_writer
         self.host: str = host
         self.timeout: float | None = Timeout.resolve_default_timeout(timeout)
         self.source_address: tuple[str, int] | None = source_address
@@ -156,7 +155,8 @@ class HTTPConnection(_BaseHTTPConnection):
 
     @typing.override
     def close(self) -> None:
-        self.conn.close()
+        if self.conn is not None:
+            self.conn.close()
         self.conn = None
 
     @property
@@ -286,7 +286,7 @@ class HTTPConnection(_BaseHTTPConnection):
 class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[reportUnsafeMultipleInheritance]
     scheme: typing.ClassVar[str] = "https"
     default_port: typing.ClassVar[int] = 443
-    proxy_is_verified = False # Proxies are not supported so they are never verified
+    proxy_is_verified: bool | None = False # Proxies are not supported so they are never verified
 
     def __init__(  # pyright: ignore[reportMissingSuperCall]
             self,
@@ -313,7 +313,7 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
             cert_file: str | None = None,
             key_file: str | None = None,
             key_password: str | None = None,
-            warc_writer: WARCWriter | None = None
+            warc_writer: WARCWriter
     ) -> None:
         super().__init__(
             host,
