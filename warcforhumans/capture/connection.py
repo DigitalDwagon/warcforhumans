@@ -372,6 +372,7 @@ class WARCWritingH11Connection(H11Connection):
             self.warc_writer.flush_pending()
 
             self.request_record = None
+            self.partial_request = False
             self.response_record = None
             self.response_payload_hash = None
             self.response_file = None
