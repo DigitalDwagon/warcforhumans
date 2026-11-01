@@ -10,8 +10,6 @@ from typing import override
 
 import h11
 from _hashlib import HASH
-from urllib3.connection import _ssl_wrap_socket_and_match_hostname
-from urllib3.exceptions import ProtocolError
 
 import warcforhumans.api as warc
 from warcforhumans.api import WARCWriter, WARCRecord
@@ -73,27 +71,40 @@ class H11Connection:
             if not secure_options:
                 secure_options = SecureConnectionOptions()
 
-            # TODO - it would be nice to not rely on urllib3 here
-            wrapped = _ssl_wrap_socket_and_match_hostname(
-                sock,
-                cert_reqs=secure_options.cert_reqs,
-                ssl_version=secure_options.ssl_version,
-                ssl_minimum_version=secure_options.ssl_minimum_version,
-                ssl_maximum_version=secure_options.ssl_maximum_version,
-                cert_file=secure_options.cert_file,
-                key_file=secure_options.key_file,
-                key_password=secure_options.key_password,
-                ca_certs=secure_options.ca_certs,
-                ca_cert_dir=secure_options.ca_cert_dir,
-                ca_cert_data=secure_options.ca_cert_data,
-                assert_hostname=secure_options.assert_hostname,
-                assert_fingerprint=secure_options.assert_fingerprint,
-                server_hostname=secure_options.server_hostname or self.info.host,
-                ssl_context=secure_options.ssl_context,
-            )
+            options = secure_options or SecureConnectionOptions()
+            context = options.ssl_context
 
-            sock = wrapped.socket
-            self.is_verified = wrapped.is_verified
+            if context is None:
+                if options.cert_reqs in (ssl.CERT_NONE, "CERT_NONE"):
+                    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                else:
+                    context = ssl.create_default_context(
+                        cafile=options.ca_certs,
+                        capath=options.ca_cert_dir,
+                        cadata=options.ca_cert_data,
+                    )
+
+            if options.ssl_minimum_version is not None:
+                context.minimum_version = ssl.TLSVersion(options.ssl_minimum_version)
+            if options.ssl_maximum_version is not None:
+                context.maximum_version = ssl.TLSVersion(options.ssl_maximum_version)
+            if options.cert_file:
+                context.load_cert_chain(
+                    options.cert_file,
+                    keyfile=options.key_file,
+                    password=options.key_password,
+                )
+
+            hostname = options.server_hostname or self.info.host
+            if isinstance(options.assert_hostname, str):
+                hostname = options.assert_hostname
+            elif options.assert_hostname is False:
+                context.check_hostname = False
+
+            sock = context.wrap_socket(sock, server_hostname=hostname)
+            self.is_verified = context.verify_mode == ssl.CERT_REQUIRED
 
         return sock
 
