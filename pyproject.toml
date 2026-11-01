@@ -19,7 +19,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pytest"
+    "pytest",
+    "basedpyright"
 ]
 
 [tool.pytest]
