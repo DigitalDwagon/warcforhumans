@@ -315,7 +315,7 @@ class HTTPSConnection(HTTPConnection, _BaseHTTPSConnection):  # pyright: ignore[
             cert_file: str | None = None,
             key_file: str | None = None,
             key_password: str | None = None,
-            warc_writer: WARCWriter
+            warc_writer: WARCWriter | None = None
     ) -> None:
         super().__init__(
             host,
