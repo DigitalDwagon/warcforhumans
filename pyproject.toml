@@ -5,7 +5,7 @@ build-backend = "uv_build"
 
 [project]
 name = "warcforhumans"
-version = "1.0.0a3"
+version = "1.0.0a4"
 description = ""
 authors = []
 readme = "README.md"
