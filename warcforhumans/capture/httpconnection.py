@@ -14,7 +14,6 @@ import socket
 
 from urllib3._base_connection import ProxyConfig, _TYPE_BODY, _ResponseOptions
 
-from tests.conftest import warc_writer
 from warcforhumans.api import WARCWriter
 
 if TYPE_CHECKING:
@@ -125,7 +124,7 @@ class HTTPConnection(_BaseHTTPConnection):
         if self.socket_options is None:
             self.socket_options = []
 
-        if not warc_writer:
+        if not self.warc_writer:
             raise ValueError("Tried to open a connection, but no WARCWriter is set!")
         conn = WARCWritingH11Connection(ConnectionInfo(self.scheme, self.host, self.port, socket_options=self.socket_options), self.warc_writer, secure_options=self.secure_connection_options)
         self.is_verified = conn.is_verified
